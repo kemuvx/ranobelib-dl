@@ -10,6 +10,14 @@ headers = {
     'Accept-Language': 'en-US,en;q=0.8',
     'Connection': 'keep-alive'
 }
+
+
+def get_ranobe_name_from_url(url:str) -> str:
+    if "https://" in url:
+        url = url.split("//")[1].split("/")[3].split("?")[0]
+    else:
+        url = url.split("/")[3].split("?")[0]
+    return url
 def get_ranobe_info(url:str) -> dict:
     """Парсит cover_url, author, title, description"""
     response = requests.get(url, headers=headers)
@@ -138,6 +146,22 @@ def get_chapter_content(url:str, chapter_num:str, chapter_name:str) -> tuple[str
                             raise Exception(f"не текст {element}, {line_of_element}")
             elif element['type'] == "horizontalRule" and "content" not in element:
                 pass
+            elif element['type'] == "bulletList":
+                bullet_list_content = element['content']
+                for element_of_list in bullet_list_content:
+                    if element_of_list['type'] == 'listItem':
+                        for content_of_list_item in element_of_list['content']:
+                            if content_of_list_item['type'] == 'paragraph':
+                                content_of_content = content_of_list_item['content'][0]
+                                if content_of_content['type'] == 'text':
+                                    print(content_of_content['text'])
+                                    content += f"<p><li>{content_of_content['text']}</li></p>\n"
+                                else:
+                                    raise Exception(element)
+                            else:
+                                raise Exception(element)
+                    else:
+                        raise Exception("not listitem?", element_of_list, "\n", element)
             else:
                 raise Exception(f"Новый тип {element['type']}, {element}")
     return content, images_dict
