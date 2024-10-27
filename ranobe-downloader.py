@@ -2,10 +2,10 @@ import os
 import time
 import mkepub
 import shutil
-from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_chapter_content
-RANOBE_NAME = input("Название ранобе: ")
+from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_chapter_content, get_ranobe_name_from_url
+RANOBE_NAME = get_ranobe_name_from_url(input("Ссылка на ранобе: "))
 RANOBE_VOLUME = input("Том: ").strip()
-
+print(f"Ранобе {RANOBE_NAME}, том {RANOBE_VOLUME}")
 STYLE = """
 @page {
     margin-bottom: 5pt;
