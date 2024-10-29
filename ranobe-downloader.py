@@ -1,168 +1,13 @@
 import os
 import time
-
 import shutil
-from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_chapter_content, get_ranobe_name_from_url, Book
+from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_chapter_content, get_ranobe_name_from_url, Book, style
 
 
 ranobe_name = get_ranobe_name_from_url(input("Ссылка на ранобе: "))
 ranobe_volume = input("Том: ").strip()
 print(f"Ранобе {ranobe_name}, том {ranobe_volume}")
-STYLE = """
-@page {
-    margin-bottom: 5pt;
-    margin-top: 5pt
-    }
 
-.block_ {
-    display: block;
-    font-size: 0.83333em;
-    line-height: 1.2;
-    text-align: center;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_1 {
-    display: block;
-    font-family: serif;
-    font-size: 0.83333em;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_2 {
-    display: block;
-    font-size: 0.83333em;
-    line-height: 1.2;
-    text-align: center;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_3 {
-    display: block;
-    font-size: 1.29167em;
-    font-weight: bold;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_4 {
-    display: block;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_5 {
-    display: block;
-    font-size: 0.83333em;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_6 {
-    display: block;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_7 {
-    display: block;
-    font-size: 1.29167em;
-    font-weight: bold;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_8 {
-    display: block;
-    font-size: 1em;
-    font-weight: bold;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_9 {
-    display: block;
-    font-size: 1em;
-    font-weight: bold;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_10 {
-    display: block;
-    font-weight: bold;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.block_11 {
-    display: block;
-    font-size: 1.29167em;
-    font-weight: normal;
-    line-height: 1.2;
-    margin: 0 0 10pt;
-    padding: 0
-    }
-.calibre {
-    color: black;
-    display: block;
-    font-family: "Arial", sans-serif;
-    font-size: 1em;
-    padding-left: 0;
-    padding-right: 0;
-    margin: 0 5pt
-    }
-.calibre1 {
-    display: block;
-    height: auto;
-    line-height: 1.2;
-    width: auto
-    }
-.calibre2 {
-    font-size: 1em;
-    line-height: 1.2;
-    vertical-align: super
-    }
-.calibre3 {
-    font-size: 0.75em;
-    line-height: 1.2;
-    vertical-align: super
-    }
-.calibre4 {
-    line-height: 1.2
-    }
-.calibre5 {
-    display: block;
-    font-size: 1.29167em;
-    line-height: 1.2
-    }
-.calibre6 {
-    line-height: 1.2;
-    text-decoration: none
-    }
-.calibre7 {
-    display: block;
-    margin-left: 40px
-    }
-.footnote {
-    display: block;
-    margin: 1em 0
-    }
-.footnote1 {
-    display: block;
-    page-break-after: avoid;
-    margin: 1em 0
-    }
-.noteref {
-    text-decoration: none
-    }
-.text_ {
-    font-size: 1.2em;
-    line-height: 1.2
-    }
-
-"""
 url_to_chapters = "https://api.lib.social/api/manga/" + ranobe_name + "/chapters"
 url_to_ranobe = "https://api.lib.social/api/manga/" + ranobe_name + ("?fields[]=background&fields[]=eng_name&fields["
                                                                      "]=otherNames&fields[]=summary&fields["
@@ -201,7 +46,7 @@ download_cover(ranobe_cover)
 book = Book(title=ranobe_title, author=ranobe_author, description=ranobe_description)
 with open('cover/cover.jpg', 'rb') as file:
     book.set_cover(file.read())
-book.set_stylesheet(STYLE)
+book.set_stylesheet(style)
 
 book.add_page(title=f"{ranobe_title} Том {ranobe_volume}", content=f"""
 <h1>{ranobe_title} Том  {ranobe_volume}</h1>

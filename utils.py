@@ -20,7 +20,161 @@ headers = {
     'Accept-Language': 'en-US,en;q=0.8',
     'Connection': 'keep-alive'
 }
+style = """
+@page {
+    margin-bottom: 5pt;
+    margin-top: 5pt
+    }
 
+.block_ {
+    display: block;
+    font-size: 0.83333em;
+    line-height: 1.2;
+    text-align: center;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_1 {
+    display: block;
+    font-family: serif;
+    font-size: 0.83333em;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_2 {
+    display: block;
+    font-size: 0.83333em;
+    line-height: 1.2;
+    text-align: center;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_3 {
+    display: block;
+    font-size: 1.29167em;
+    font-weight: bold;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_4 {
+    display: block;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_5 {
+    display: block;
+    font-size: 0.83333em;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_6 {
+    display: block;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_7 {
+    display: block;
+    font-size: 1.29167em;
+    font-weight: bold;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_8 {
+    display: block;
+    font-size: 1em;
+    font-weight: bold;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_9 {
+    display: block;
+    font-size: 1em;
+    font-weight: bold;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_10 {
+    display: block;
+    font-weight: bold;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.block_11 {
+    display: block;
+    font-size: 1.29167em;
+    font-weight: normal;
+    line-height: 1.2;
+    margin: 0 0 10pt;
+    padding: 0
+    }
+.calibre {
+    color: black;
+    display: block;
+    font-family: "Arial", sans-serif;
+    font-size: 1em;
+    padding-left: 0;
+    padding-right: 0;
+    margin: 0 5pt
+    }
+.calibre1 {
+    display: block;
+    height: auto;
+    line-height: 1.2;
+    width: auto
+    }
+.calibre2 {
+    font-size: 1em;
+    line-height: 1.2;
+    vertical-align: super
+    }
+.calibre3 {
+    font-size: 0.75em;
+    line-height: 1.2;
+    vertical-align: super
+    }
+.calibre4 {
+    line-height: 1.2
+    }
+.calibre5 {
+    display: block;
+    font-size: 1.29167em;
+    line-height: 1.2
+    }
+.calibre6 {
+    line-height: 1.2;
+    text-decoration: none
+    }
+.calibre7 {
+    display: block;
+    margin-left: 40px
+    }
+.footnote {
+    display: block;
+    margin: 1em 0
+    }
+.footnote1 {
+    display: block;
+    page-break-after: avoid;
+    margin: 1em 0
+    }
+.noteref {
+    text-decoration: none
+    }
+.text_ {
+    font-size: 1.2em;
+    line-height: 1.2
+    }
+
+"""
 
 def get_ranobe_name_from_url(url:str) -> str:
     if "https://" in url:
