@@ -9,19 +9,7 @@ ranobe_volume = input("Том: ").strip()
 print(f"Ранобе {ranobe_name}, том {ranobe_volume}")
 
 url_to_chapters = "https://api.lib.social/api/manga/" + ranobe_name + "/chapters"
-url_to_ranobe = "https://api.lib.social/api/manga/" + ranobe_name + ("?fields[]=background&fields[]=eng_name&fields["
-                                                                     "]=otherNames&fields[]=summary&fields["
-                                                                     "]=releaseDate&fields[]=type_id&fields["
-                                                                     "]=caution&fields[]=views&fields["
-                                                                     "]=close_view&fields[]=rate_avg&fields["
-                                                                     "]=rate&fields[]=genres&fields[]=tags&fields["
-                                                                     "]=teams&fields[]=franchise&fields["
-                                                                     "]=authors&fields[]=publisher&fields["
-                                                                     "]=userRating&fields[]=moderated&fields["
-                                                                     "]=metadata&fields[]=metadata.count&fields["
-                                                                     "]=metadata.close_comments&fields["
-                                                                     "]=manga_status_id&fields[]=chap_count&fields["
-                                                                     "]=status_id&fields[]=artists&fields[]=format")
+url_to_ranobe = "https://api.lib.social/api/manga/" + ranobe_name + ('''?fields[]=background&fields[]=eng_name&fields[]=otherNames&fields[]=summary&fields[]=releaseDate&fields[]=type_id&fields[]=caution&fields[]=views&fields[]=close_view&fields[]=rate_avg&fields[]=rate&fields[]=genres&fields[]=tags&fields[]=teams&fields[]=user&fields[]=franchise&fields[]=authors&fields[]=publisher&fields[]=userRating&fields[]=moderated&fields[]=metadata&fields[]=metadata.count&fields[]=metadata.close_comments&fields[]=manga_status_id&fields[]=chap_count&fields[]=status_id&fields[]=artists&fields[]=format''')
 print(f"url к информации о ранобе: {url_to_ranobe}\n")
 print(f"url к главам: {url_to_chapters}\n")
 
