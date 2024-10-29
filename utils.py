@@ -319,6 +319,15 @@ def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[
                                 raise Exception(element)
                     else:
                         raise Exception("not listitem?", element_of_list, "\n", element)
+            elif element['type'] == "blockquote":
+                if "content" in element:
+                    for line_of_element in element['content']:
+                        if line_of_element['type'] == 'paragraph':
+                            content += f"<blockquote><p>{line_of_element['content'][0]['text']}</p></blockquote>\n"
+                        else:
+                            raise Exception(f"не текст {element}, {line_of_element}")
+                else:
+                    raise Exception(f"не текст {element}, {line_of_element}")
             else:
                 raise Exception(f"Новый тип {element['type']}, {element}")
     return content, images_dict
