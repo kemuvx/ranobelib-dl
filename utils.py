@@ -154,7 +154,7 @@ def get_chapter_content(url:str, chapter_num:str, chapter_name:str) -> tuple[str
                             if content_of_list_item['type'] == 'paragraph':
                                 content_of_content = content_of_list_item['content'][0]
                                 if content_of_content['type'] == 'text':
-                                    print(content_of_content['text'])
+                                    
                                     content += f"<p><li>{content_of_content['text']}</li></p>\n"
                                 else:
                                     raise Exception(element)
