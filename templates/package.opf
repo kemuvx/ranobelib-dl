@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/" version="3.0" xml:lang="en"
+  unique-identifier="uuid">
+  <metadata>
+    <dc:identifier id="uuid">{{ uuid }}</dc:identifier>
+    <dc:title>{{ title|escape }}</dc:title>
+    <dc:language>{{ lang if lang else 'en' }}</dc:language>
+    <dc:date>{{ published if published else date[:10] }}</dc:date>
+    <meta property="dcterms:modified">{{ date }}</meta>
+    {%- if author %}
+    <dc:creator>{{ author|escape }}</dc:creator>
+    {%- endif %}
+    {%- for author in authors %}
+    <dc:creator>{{ author|escape }}</dc:creator>
+    {%- endfor %}
+    {%- for subject in subjects %}
+    <dc:subject>{{ subject|escape }}</dc:subject>
+    {%- endfor %}
+    {%- if description %}
+    <dc:description>{{ description|escape }}</dc:description>
+    {%- endif %}
+    {%- if rights %}
+    <dc:rights>{{ rights|escape }}</dc:rights>
+    <meta name="cover" content="cover"/>
+    {%- endif %}
+  </metadata>
+  <manifest>
+    <item id="htmltoc" properties="nav" media-type="application/xhtml+xml" href="toc.xhtml"/>
+    <item href="toc.ncx" id="toc" media-type="application/x-dtbncx+xml"/>
+    <item media-type="text/css" id="css" href="css/stylesheet.css"/>
+    {%- if cover %}
+    <item id="cover-xhtml" href="cover.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" properties="cover-image" href="covers/{{ cover }}" media-type="{{ cover|mediatype }}"/>
+    {%- endif %}
+    {%- for page in pages %}
+    <item id="id-{{ page.page_id }}" href="page{{ page.page_id }}.xhtml" media-type="application/xhtml+xml"/>
+    {%- endfor %}
+    {% for image in images %}
+    <item id="id-im{{ image.image_id }}" href="images/{{ image.name }}" media-type="{{ image.name|mediatype }}"/>
+    {% endfor %}
+    {%- for font in fonts %}
+    <item id="id-{{ font }}" href="fonts/{{ font }}" media-type="{{ font|fonttype }}"/>
+    {%- endfor %}
+  </manifest>
+  <spine toc="toc">
+    {%- if cover %}
+    <itemref idref="cover-xhtml" linear="yes"/>
+    {%- endif %}
+    {%- for page in pages %}
+    <itemref idref="id-{{ page.page_id }}"/>
+    {%- endfor %}
+  </spine>
+</package>
