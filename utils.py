@@ -219,10 +219,7 @@ def download_cover(url: str) -> None:
 
 
 def remove_bad_chars(text: str) -> str:
-    bad_chars = '"?<>|\/:–'
-    for c in bad_chars:
-        text = text.replace(c, '')
-    return text
+    return ''.join(c for c in text if c not in '"?<>|\/:–')
 
 
 def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[str, dict]:
