@@ -179,12 +179,12 @@ style = """
 
 def get_ranobe_name_from_url(url: str) -> str:
     url = url.strip()
-    if "https://" in url and "/ru/" in url:
+    if "https://" in url and "/read/" in url:
         url = url.split("//")[1].split("/")[2]
     elif "https://" in url:
         url = url.split("//")[1].split("/")[3].split("?")[0]
     else:
-        url = url.split("/")[3].split("?")[0]
+        raise Exception("Invalid URL", url)
     return url
 
 

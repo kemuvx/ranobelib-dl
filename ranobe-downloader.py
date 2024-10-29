@@ -53,7 +53,6 @@ book.add_page(title=f"{ranobe_title} Том {ranobe_volume}", content=f"""
 """)
 
 for chapter_num, chapter_name in ranobe_chapters_dict.items():
-    print(chapter_num, chapter_name)
     time.sleep(1)
     url_to_chapter = ("https://api.lib.social/api/manga/" + ranobe_name +
                       "/chapter?number=" + str(chapter_num) + "&volume=" + str(ranobe_volume))
