@@ -176,35 +176,30 @@ style = """
 
 """
 
-def get_ranobe_name_from_url(url:str) -> str:
-    if "https://" in url:
+
+def get_ranobe_name_from_url(url: str) -> str:
+    url = url.strip()
+    if "https://" in url and "/ru/" in url:
+        url = url.split("//")[1].split("/")[2]
+    elif "https://" in url:
         url = url.split("//")[1].split("/")[3].split("?")[0]
     else:
         url = url.split("/")[3].split("?")[0]
     return url
-def get_ranobe_info(url:str) -> dict:
+
+
+def get_ranobe_info(url: str) -> dict:
     """Парсит cover_url, author, title, description"""
     response = requests.get(url, headers=headers)
-    if response.status_code not in [200, 204]:
-        print(f"Ответ {response.status_code}: {url}")
-        time.sleep(5)
-        get_ranobe_info(url)
     data = response.json()['data']
-    ranobe_info_dict = dict()
-    ranobe_info_dict['cover_url'] = data['cover']['default']
-    ranobe_info_dict['author'] = data['authors'][0]['rus_name'] if data['authors'][0]['rus_name'] is not None else data['authors'][0]['name']
-    try:
-        ranobe_info_dict['title'] = data['rus_name']
-    except:
-        ranobe_info_dict['title'] = data['name']
-    try:
-        ranobe_info_dict['description'] = data['summary']
-    except Exception as e:
-        ranobe_info_dict['description'] = ""
-    return ranobe_info_dict
+    return {
+        'cover_url': data.get('cover', {}).get('default', ''),
+        'author': data.get('authors', [{}])[0].get('rus_name') or data.get('authors', [{}])[0].get('name','Unknown Author'),
+        'title': data.get('rus_name', data.get('name', '')),
+        'description': data.get('summary', '')
+    }
 
-
-def get_volume_chapters(url:str, volume:str) -> dict:
+def get_volume_chapters(url: str, volume: str) -> dict:
     """Парсит номер и название глав"""
     response = requests.get(url, headers=headers)
     data = response.json()['data']
@@ -216,23 +211,25 @@ def get_volume_chapters(url:str, volume:str) -> dict:
             chapters_dict[chapter_num] = chapter_name
     return chapters_dict
 
-def download_cover(url:str) -> None:
+
+def download_cover(url: str) -> None:
     cover_data = requests.get(url, headers=headers).content
     with open('cover/cover.jpg', 'wb') as handler:
         handler.write(cover_data)
 
-def remove_bad_chars(text:str) -> str:
+
+def remove_bad_chars(text: str) -> str:
     bad_chars = '"?<>|\/:–'
     for c in bad_chars:
         text = text.replace(c, '')
     return text
 
 
-def get_chapter_content(url:str, chapter_num:str, chapter_name:str) -> tuple[str, dict]:
+def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[str, dict]:
     response = requests.get(url, headers=headers)
     json_response = response.json()
     try:
-        json_response['data']['content']['type'] == "doc" # если ошибка значит легаси
+        json_response['data']['content']['type'] == "doc"  # если ошибка значит легаси
         is_legacy = False
         print(f"\nГлава {chapter_num}: {chapter_name}: {url}  \nТип главы: не легаси")
     except TypeError:
@@ -299,7 +296,7 @@ def get_chapter_content(url:str, chapter_num:str, chapter_name:str) -> tuple[str
                         else:
                             print(line_of_element['text'])
                             raise Exception(f"не текст {line_of_element['type']}, {line_of_element}")
-        
+
                     content += f"<p></p>\n"
             elif element['type'] == "heading":
                 if "content" in element:
@@ -330,8 +327,6 @@ def get_chapter_content(url:str, chapter_num:str, chapter_name:str) -> tuple[str
     return content, images_dict
 
 
-
-
 ###############################################################################
 #  Дальше пофикшенный код mkepub
 ###############################################################################
@@ -357,10 +352,9 @@ def fonttype(name):
     return mimetypes[ext]
 
 
-env = jinja2.Environment(loader=jinja2.PackageLoader('mkepub'))
+env = jinja2.Environment(loader=jinja2.FileSystemLoader("templates"))
 env.filters['mediatype'] = mediatype
 env.filters['fonttype'] = fonttype
-
 ###############################################################################
 
 Page = collections.namedtuple('Page', 'page_id title children')
