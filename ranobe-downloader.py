@@ -6,28 +6,37 @@ from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_b
 
 ranobe_name = get_ranobe_name_from_url(input("Ссылка на ранобе: "))
 ranobe_volume = input("Том: ").strip()
-print(f"Ранобе {ranobe_name}, том {ranobe_volume}")
+print(f"Ранобе id {ranobe_name}, том {ranobe_volume}")
 
 url_to_chapters = "https://api.lib.social/api/manga/" + ranobe_name + "/chapters"
-url_to_ranobe = "https://api.lib.social/api/manga/" + ranobe_name + ('''?fields[]=background&fields[]=eng_name&fields[]=otherNames&fields[]=summary&fields[]=releaseDate&fields[]=type_id&fields[]=caution&fields[]=views&fields[]=close_view&fields[]=rate_avg&fields[]=rate&fields[]=genres&fields[]=tags&fields[]=teams&fields[]=user&fields[]=franchise&fields[]=authors&fields[]=publisher&fields[]=userRating&fields[]=moderated&fields[]=metadata&fields[]=metadata.count&fields[]=metadata.close_comments&fields[]=manga_status_id&fields[]=chap_count&fields[]=status_id&fields[]=artists&fields[]=format''')
+url_to_ranobe = "https://api.lib.social/api/manga/" + ranobe_name + ('''?fields[]=background&fields[]=eng_name&fields["
+                                                                     "]=otherNames&fields[]=summary&fields["
+                                                                     "]=releaseDate&fields[]=type_id&fields["
+                                                                     "]=caution&fields[]=views&fields["
+                                                                     "]=close_view&fields[]=rate_avg&fields["
+                                                                     "]=rate&fields[]=genres&fields[]=tags&fields["
+                                                                     "]=teams&fields[]=franchise&fields["
+                                                                     "]=authors&fields[]=publisher&fields["
+                                                                     "]=userRating&fields[]=moderated&fields["
+                                                                     "]=metadata&fields[]=metadata.count&fields["
+                                                                     "]=metadata.close_comments&fields["
+                                                                     "]=manga_status_id&fields[]=chap_count&fields["
+                                                                     "]=status_id&fields[]=artists&fields[]=format''')
+
 print(f"url к информации о ранобе: {url_to_ranobe}\n")
 print(f"url к главам: {url_to_chapters}\n")
 
-try:
-    shutil.rmtree("cover")
-except:
-    pass
-try:
-    shutil.rmtree("images")
-except:
-    pass
+shutil.rmtree("cover", ignore_errors=True)
+shutil.rmtree("images", ignore_errors=True)
 os.makedirs("cover", exist_ok=True)
 os.makedirs("images", exist_ok=True)
+
 ranobe_info_dict = get_ranobe_info(url_to_ranobe)
 ranobe_title = ranobe_info_dict["title"]
 ranobe_description = ranobe_info_dict["description"]
 ranobe_cover = ranobe_info_dict["cover_url"]
 ranobe_author = ranobe_info_dict["author"]
+
 ranobe_chapters_dict = get_volume_chapters(url=url_to_chapters, volume=ranobe_volume)
 download_cover(ranobe_cover)
 
@@ -58,9 +67,8 @@ for chapter_num, chapter_name in ranobe_chapters_dict.items():
 
 
 book_name = remove_bad_chars(ranobe_title) + f" Том {ranobe_volume}.epub"
-try:
+if os.path.exists(book_name):
     os.remove(book_name)
-except:
-    pass
 book.save(book_name)
+
 print(f'Книга сохранена как {book_name}')
