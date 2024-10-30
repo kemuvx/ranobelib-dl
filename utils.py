@@ -231,9 +231,11 @@ def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[
     except TypeError:
         is_legacy = True
         print(f"\nГлава {chapter_num}: {chapter_name}: {url}")
-    os.makedirs("images", exist_ok=True)
+        
+
     images_dict = {}
     image_counter = 1
+
     if is_legacy:
         content_soup = BeautifulSoup(json_response['data']['content'], 'lxml')
         bad_sites = ["novel.tl", "ruranobe.ru", "rulate.ru"]
