@@ -218,10 +218,6 @@ def remove_bad_chars(text: str) -> str:
     return ''.join(c for c in text if c not in '"?<>|\/:–')
 
 
-import os
-import requests
-from bs4 import BeautifulSoup
-from requests.exceptions import RequestException
 
 class ChapterContentParser:
     def __init__(self, url: str, chapter_num: str, chapter_name: str):
