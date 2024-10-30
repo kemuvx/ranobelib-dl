@@ -202,13 +202,10 @@ def get_volume_chapters(url: str, volume: str) -> dict:
     """Парсит номер и название глав"""
     response = requests.get(url, headers=headers)
     data = response.json()['data']
-    chapters_dict = {}
-    for chapter in data:
-        if chapter['volume'] == volume:
-            chapter_num = chapter['number']
-            chapter_name = chapter['name'] if chapter['name'].strip() != "" else f"Глава {chapter_num}"
-            chapters_dict[chapter_num] = chapter_name
-    return chapters_dict
+    return {
+        chapter['number']: (chapter['name'] if chapter['name'].strip() else f"Глава {chapter['number']}")
+        for chapter in data if chapter.get('volume') == volume
+    }
 
 
 def download_cover(url: str) -> None:
@@ -221,118 +218,190 @@ def remove_bad_chars(text: str) -> str:
     return ''.join(c for c in text if c not in '"?<>|\/:–')
 
 
-def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[str, dict]:
-    response = requests.get(url, headers=headers)
-    json_response = response.json()
-    try:
-        json_response['data']['content']['type'] == "doc"  # если ошибка значит легаси
-        is_legacy = False
-        print(f"\nГлава {chapter_num}: {chapter_name}: {url}")
-    except TypeError:
-        is_legacy = True
-        print(f"\nГлава {chapter_num}: {chapter_name}: {url}")
+import os
+import requests
+from bs4 import BeautifulSoup
+from requests.exceptions import RequestException
+
+class ChapterContentParser:
+    def __init__(self, url: str, chapter_num: str, chapter_name: str):
+        self.url = url
+        self.chapter_num = chapter_num
+        self.chapter_name = chapter_name
+        self.headers = headers
+        self.images_dict = {}
+        os.makedirs("images", exist_ok=True)  # Ensure images directory exists
+
+    def fetch_content(self) -> tuple[str, dict]:
+        """Парсит и анализирует главу"""
+        response = requests.get(self.url, headers=self.headers)
+        response.raise_for_status()
+        json_response = response.json()
+
+
+        try: # Проверка легаси глава или нет
+            json_response['data']['content']['type'] == "doc"  # если выдает ошибку значит легаси
+            is_legacy = False
+        except TypeError:
+            is_legacy = True
+        print(f"\nГлава {self.chapter_num}: {self.chapter_name}: {self.url}")
         
 
-    images_dict = {}
-    image_counter = 1
+        if is_legacy:
+            content = self._parse_legacy_content(json_response['data']['content'])
+        else:
+            content = self._parse_modern_content(json_response['data'])
+        
 
-    if is_legacy:
-        content_soup = BeautifulSoup(json_response['data']['content'], 'lxml')
+        content = f"<h1>Глава {self.chapter_num}. {self.chapter_name}</h1>\n{content}"
+        return content, self.images_dict
+
+    def _parse_legacy_content(self, content_html: str) -> str:
+        """Парсит легаси главу (html контент)"""
+        content_soup = BeautifulSoup(content_html, 'lxml')
+        image_counter = 1
         bad_sites = ["novel.tl", "ruranobe.ru", "rulate.ru"]
+
         for img in content_soup.find_all('img'):
             img_url = img['src']
             if not any(x in img_url for x in bad_sites):
                 img_url = "https://ranobelib.me" + img_url
             if img_url.count("ranobelib.me") > 1:
+                print("странно: " + img_url)
                 img_url = img_url[20:]
-            print(f"Арт {chapter_num}-{image_counter}: " + img_url)
-            with open(f'images/{chapter_num}-{image_counter}.jpg', 'wb') as f:
-                f.write(requests.get(img_url, headers=headers).content)
-            del img['loading']
-            img['src'] = f'images/{chapter_num}-{image_counter}.jpg'
-            images_dict[str(image_counter)] = img['src']
+            img_path = os.path.join("images", f"{self.chapter_num}-{image_counter}.jpg")
+            self._save_image(img_url, img_path)
+            self.images_dict[str(image_counter)] = img_path
+            img['src'] = img_path
             image_counter += 1
-        for p in content_soup.find_all('p'):
-            del p['data-paragraph-index']
-        content = ((f"<h1>Глава {str(chapter_num)}. {str(chapter_name)}</h1>" + str(content_soup))
-                   .replace('<html>', "")
-                   .replace("</html>", "")
-                   .replace("<body>", "")
-                   .replace("</body>", ""))
 
+        
+        content = str(content_soup).replace('<html>', "").replace("</html>", "").replace("<body>", "").replace("</body>", "")
+        return content
 
-    else:  # не легаси
-        attachments = json_response['data']['attachments']
-        chapter_content = json_response['data']['content']['content']
-        content = f"<h1>Глава {chapter_num}. {chapter_name}</h1>\n"
-        for element in chapter_content:
+    def _parse_modern_content(self, data: dict) -> str:
+        """Парсит модерн главу (json контент)"""
+        content = ""
+        image_counter = 1
+        attachments = {att['name']: f"https://ranobelib.me{att['url']}" for att in data.get('attachments', [])}
+        
+        for element in data['content']['content']:
             if element['type'] == 'image':
-                images = element['attrs']['images']
-                for image in images:
-                    image_id = image['image']
-                    for attachment in attachments:
-                        if attachment['name'] == image_id:
-                            img_url = ' https://ranobelib.me' + attachment['url']
-                            print(f"Арт {chapter_num}-{image_counter}: " + img_url)
-                            img_content = requests.get(img_url, headers=headers).content
-                            with open(f'images/{chapter_num}-{image_counter}.png', 'wb') as handler:
-                                handler.write(img_content)
-                            content += f'<p><img src="images/{chapter_num}-{image_counter}.png"></img></p>\n'
-                            images_dict[str(image_counter)] = f"images/{chapter_num}-{image_counter}.png"
-                            image_counter += 1
+                content, image_counter = self._process_images(element, attachments, image_counter, content)
             elif element['type'] == "paragraph":
-                if "content" in element:
-                    for line_of_element in element['content']:
-                        if line_of_element['type'] == 'text':
-                            if "marks" and "italic" in str(line_of_element):
-                                content += f"<p><i>{line_of_element['text']}</i></p>\n"
-                            else:
-                                content += f"<p>{line_of_element['text']}</p>\n"
-                        elif line_of_element['type'] == 'hardBreak':
-                            content += "<br>\n"
-                        else:
-                            print(line_of_element['text'])
-                            raise Exception(f"не текст {line_of_element['type']}, {line_of_element}")
-                else:
-                    content += f"<p></p>\n"
+                content += self._process_paragraph(element)
             elif element['type'] == "heading":
-                if "content" in element:
-                    for line_of_element in element['content']:
-                        if line_of_element['type'] == 'text':
-                            content += f"<h3>{line_of_element['text']}</h3>\n"
-                        else:
-                            raise Exception(f"не текст {element}, {line_of_element}")
-                else:
-                    raise Exception("контент не в heading?", element)
-            elif element['type'] == "horizontalRule" and "content" not in element:
-                pass
+                content += self._process_heading(element)
             elif element['type'] == "bulletList":
-                bullet_list_content = element['content']
-                for element_of_list in bullet_list_content:
-                    if element_of_list['type'] == 'listItem':
-                        for content_of_list_item in element_of_list['content']:
-                            if content_of_list_item['type'] == 'paragraph':
-                                content_of_content = content_of_list_item['content'][0]
-                                if content_of_content['type'] == 'text':
-                                    content += f"<p><li>{content_of_content['text']}</li></p>\n"
-                                else:
-                                    raise Exception(element)
-                            else:
-                                raise Exception(element)
-                    else:
-                        raise Exception("not listitem?", element_of_list, "\n", element)
+                content += self._process_bullet_list(element)
             elif element['type'] == "blockquote":
-                if "content" in element:
-                    for line_of_element in element['content']:
-                        if line_of_element['type'] == 'paragraph':
-                            content += f"<blockquote><p>{line_of_element['content'][0]['text']}</p></blockquote>\n"
-                        else:
-                            raise Exception(f"не текст {element}, {line_of_element}")
-                else:
-                    raise Exception(f"не текст {element}, {line_of_element}")
+                content += self._process_blockquote(element)
+            elif element['type'] == "horizontalRule":
+                content += self._process_horizontal_rule(element)
             else:
-                raise Exception(f"Новый тип {element['type']}, {element}")
-    return content, images_dict
+                raise Exception("Новый тип элемента, надо обработать", element)
+        return content
+
+    def _save_image(self, img_url: str, img_path: str):
+        """Скачивает и сохраняет картинку."""
+        img_content = requests.get(img_url, headers=self.headers).content
+        with open(img_path, 'wb') as f:
+            f.write(img_content)
+
+    def _process_images(self, element, attachments, image_counter, content):
+        for image in element['attrs']['images']:
+            img_url = attachments.get(image['image'])
+            if img_url:
+                img_path = os.path.join("images", f"{self.chapter_num}-{image_counter}.jpg")
+                self._save_image(img_url, img_path)
+                content += f'<p><img src="{img_path}"></img></p>\n'
+                self.images_dict[str(image_counter)] = img_path
+                image_counter += 1
+        return content, image_counter
+
+    def _process_paragraph(self, element):
+        paragraph_content = ""
+        for line in element.get("content", []):
+            if line['type'] == 'text':
+                text = f"<i>{line['text']}</i>" if any(mark['type'] == "italic" for mark in line.get('marks', [])) else line['text']
+                paragraph_content += f"<p>{text}</p>\n"
+            elif line['type'] == 'hardBreak':
+                paragraph_content += "<br>\n"
+            else:
+                raise Exception("Другой тип элемента, надо обработать", line + " in" + element)
+        return paragraph_content
+
+    def _process_heading(self, element):
+        heading_level = element.get("attrs", {}).get("level", 3)
+        heading_content = ""
+
+        for line in element.get("content", []):
+            if line['type'] == 'text':
+                text = line['text']
+                
+                if any(mark['type'] == "bold" for mark in line.get('marks', [])):
+                    text = f"<b>{text}</b>"
+
+                heading_content += text
+            else:
+                raise Exception("Другой тип элемента, надо обработать", line + " in" + element)
+
+        return f"<h{heading_level}>{heading_content}</h{heading_level}>\n"
+
+    def _process_bullet_list(self, element):
+        list_content = ""
+        for item in element.get("content", []):
+            if item['type'] == 'listItem':
+                for sub_item in item.get("content", []):
+                    if sub_item['type'] == 'paragraph':
+                        paragraph_text = ""
+                        for content_item in sub_item.get("content", []):
+                            if content_item['type'] == 'text':
+                                paragraph_text += content_item['text']
+                            else:
+                                raise Exception("Другой тип элемента, надо обработать", content_item + " in" + sub_item)
+                        list_content += f"<p><li>{paragraph_text}</li></p>\n"
+                    else:
+                        raise Exception("Другой тип элемента, надо обработать", sub_item + " in" + item)
+            else:
+                raise Exception("Другой тип элемента, надо обработать", item)
+        return list_content
+
+    def _process_blockquote(self, element):
+        quote_content = ""
+        for item in element.get("content", []):
+            if item['type'] == 'paragraph':
+                paragraph_text = ""
+                for sub_item in item.get("content", []):
+                    if sub_item['type'] == 'text':
+                        paragraph_text += sub_item['text']
+                    else:
+                        raise Exception("Другой тип элемента, надо обработать", sub_item + " in" + item)
+                quote_content += f"<blockquote><p>{paragraph_text}</p></blockquote>\n"
+            else:
+                raise Exception("Другой тип элемента, надо обработать", item)
+        return quote_content
+    def _process_horizontal_rule(self, element):
+        return "\n"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ###############################################################################

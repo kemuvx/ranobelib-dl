@@ -1,7 +1,7 @@
 import os
 import time
 import shutil
-from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_chapter_content, get_ranobe_name_from_url, Book, style
+from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_ranobe_name_from_url, Book, style, ChapterContentParser
 
 
 class RanobeDownloader:
@@ -35,11 +35,10 @@ class RanobeDownloader:
 
     def add_chapters_to_book(self):
         for chapter_num, chapter_name in self.ranobe_chapters_dict.items():
-            time.sleep(1)
             url_to_chapter = (f"https://api.lib.social/api/manga/{self.ranobe_name}/chapter?number={chapter_num}"
                               f"&volume={self.ranobe_volume}")
-            chapter_content, images_dict = get_chapter_content(url=url_to_chapter, chapter_num=chapter_num,
-                                                                chapter_name=chapter_name)
+            parser = ChapterContentParser(url=url_to_chapter, chapter_num=chapter_num, chapter_name=chapter_name)
+            chapter_content, images_dict = parser.fetch_content()
             self.book.add_page(title=f"Глава {chapter_num}. {chapter_name}", content=chapter_content)
             if images_dict:
                 for image in images_dict.values():
@@ -51,10 +50,17 @@ class RanobeDownloader:
         if os.path.exists(book_name):
             os.remove(book_name)
         self.book.save(book_name)
-        print(f'Книга сохранена как {book_name}')
+        print(f'\nКнига сохранена как {book_name}')
+
 
 
 if __name__ == "__main__":
+    shutil.rmtree("cover", ignore_errors=True)
+    shutil.rmtree("images", ignore_errors=True)
+    os.makedirs("cover", exist_ok=True)
+    os.makedirs("images", exist_ok=True)
+
+
     ranobe_name = get_ranobe_name_from_url(input("Ссылка на ранобе: "))
     ranobe_volume = input("Том: ").strip()
     print(f"Ранобе id {ranobe_name}, том {ranobe_volume}")
