@@ -1,5 +1,4 @@
 import requests
-import time
 import os
 from bs4 import BeautifulSoup
 import collections
@@ -228,17 +227,16 @@ def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[
     try:
         json_response['data']['content']['type'] == "doc"  # если ошибка значит легаси
         is_legacy = False
-        print(f"\nГлава {chapter_num}: {chapter_name}: {url}  \nТип главы: не легаси")
+        print(f"\nГлава {chapter_num}: {chapter_name}: {url}")
     except TypeError:
         is_legacy = True
-        print(f"\nГлава {chapter_num}: {chapter_name}: {url}  \nТип главы: легаси")
+        print(f"\nГлава {chapter_num}: {chapter_name}: {url}")
     os.makedirs("images", exist_ok=True)
     images_dict = {}
     image_counter = 1
     if is_legacy:
         content_soup = BeautifulSoup(json_response['data']['content'], 'lxml')
         bad_sites = ["novel.tl", "ruranobe.ru", "rulate.ru"]
-
         for img in content_soup.find_all('img'):
             img_url = img['src']
             if not any(x in img_url for x in bad_sites):
@@ -293,7 +291,7 @@ def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[
                         else:
                             print(line_of_element['text'])
                             raise Exception(f"не текст {line_of_element['type']}, {line_of_element}")
-
+                else:
                     content += f"<p></p>\n"
             elif element['type'] == "heading":
                 if "content" in element:
@@ -302,6 +300,8 @@ def get_chapter_content(url: str, chapter_num: str, chapter_name: str) -> tuple[
                             content += f"<h3>{line_of_element['text']}</h3>\n"
                         else:
                             raise Exception(f"не текст {element}, {line_of_element}")
+                else:
+                    raise Exception("контент не в heading?", element)
             elif element['type'] == "horizontalRule" and "content" not in element:
                 pass
             elif element['type'] == "bulletList":

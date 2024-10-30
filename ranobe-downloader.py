@@ -23,7 +23,7 @@ url_to_ranobe = "https://api.lib.social/api/manga/" + ranobe_name + ('''?fields[
                                                                      "]=manga_status_id&fields[]=chap_count&fields["
                                                                      "]=status_id&fields[]=artists&fields[]=format''')
 
-print(f"url к информации о ранобе: {url_to_ranobe}\n")
+print(f"url к информации о ранобе: {url_to_ranobe}")
 print(f"url к главам: {url_to_chapters}\n")
 
 shutil.rmtree("cover", ignore_errors=True)
