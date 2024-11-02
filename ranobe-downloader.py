@@ -2,7 +2,7 @@ import os
 import time
 import shutil
 from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_ranobe_name_from_url, Book, style, ChapterContentParser
-
+TIME_TO_SLEEP = 0.5 # задержка между запросами к каждой главе
 
 class RanobeDownloader:
     def __init__(self, ranobe_name, ranobe_volume):
@@ -44,7 +44,7 @@ class RanobeDownloader:
                 for image in images_dict.values():
                     with open(image, 'rb') as image_file:
                         self.book.add_image(image[7:], image_file.read())
-
+            time.sleep(TIME_TO_SLEEP) # Чтобы не получить error 429
     def save_book(self):
         book_name = remove_bad_chars(self.ranobe_info_dict["title"]) + f" Том {self.ranobe_volume}.epub"
         if os.path.exists(book_name):
@@ -71,4 +71,4 @@ if __name__ == "__main__":
     downloader.download_cover()
     downloader.create_book()
     downloader.add_chapters_to_book()
-    downloader.save_book()
+    downloader.save_book()  
