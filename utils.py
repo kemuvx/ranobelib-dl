@@ -3,7 +3,6 @@ import os
 from bs4 import BeautifulSoup
 import collections
 import datetime
-import imghdr
 import itertools
 import jinja2
 import pathlib
@@ -215,7 +214,7 @@ def download_cover(url: str) -> None:
 
 
 def remove_bad_chars(text: str) -> str:
-    return ''.join(c for c in text if c not in '"?<>|\/:–')
+    return ''.join(c for c in text if c not in r'"?<>|\/:–')
 
 
 
@@ -263,8 +262,9 @@ class ChapterContentParser:
             if not any(x in img_url for x in bad_sites):
                 img_url = "https://ranobelib.me" + img_url
             if img_url.count("ranobelib.me") > 1:
-                print("странно: " + img_url)
                 img_url = img_url[20:]
+                print(f"Арт {self.chapter_num}-{image_counter}: " + img_url)
+                
             img_path = os.path.join("images", f"{self.chapter_num}-{image_counter}.jpg")
             self._save_image(img_url, img_path)
             self.images_dict[str(image_counter)] = img_path
@@ -486,9 +486,22 @@ class Book:
 
     def set_cover(self, data):
         """Set the cover image to the given data."""
-        self._cover = 'cover.' + imghdr.what(None, h=data)
-        self._add_file(pathlib.Path('covers') / self._cover, data)
-        self._write('cover.xhtml', 'EPUB/cover.xhtml', cover=self._cover)
+        magic_numbers = {
+            b'\xFF\xD8\xFF': 'jpg',
+            b'\x89PNG\r\n': 'png',
+            b'GIF87a': 'gif',
+            b'GIF89a': 'gif',
+            b'RIFF': 'webp'
+        }
+        
+        for magic, ext in magic_numbers.items():
+            if data.startswith(magic):
+                self._cover = f'cover.{ext}'
+                self._add_file(pathlib.Path('covers') / self._cover, data)
+                self._write('cover.xhtml', 'EPUB/cover.xhtml', cover=self._cover)
+                return
+                
+        raise ValueError('Unsupported image format')
 
     def set_stylesheet(self, data):
         """Set the stylesheet to the given css data."""

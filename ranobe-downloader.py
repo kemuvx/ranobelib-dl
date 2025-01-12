@@ -1,6 +1,8 @@
 import os
 import time
 import shutil
+import requests
+import utils
 from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_ranobe_name_from_url, Book, style, ChapterContentParser
 TIME_TO_SLEEP = 0.5 # задержка между запросами к каждой главе
 
@@ -14,6 +16,7 @@ class RanobeDownloader:
 
     def get_ranobe_info(self):
         url_to_ranobe = f"https://api.lib.social/api/manga/{self.ranobe_name}"
+        print(url_to_ranobe)
         self.ranobe_info_dict = get_ranobe_info(url_to_ranobe)
         return self.ranobe_info_dict
 
@@ -23,7 +26,23 @@ class RanobeDownloader:
         return self.ranobe_chapters_dict
 
     def download_cover(self):
-        download_cover(self.ranobe_info_dict["cover_url"])
+        utils.download_cover(self.ranobe_info_dict["cover_url"])
+
+    def get_cover(self):
+        url_to_covers = f"https://api2.mangalib.me/api/manga/{self.ranobe_name}/covers"
+        json_data = requests.get(url_to_covers).json()
+        
+        covers = {}
+        for item in json_data["data"]:
+            volume_num = item["info"]
+            cover_url = item["cover"]["default"]
+            covers[volume_num] = cover_url
+
+        if len(covers) > 1 and str(self.ranobe_volume) in covers:
+            self.ranobe_info_dict["cover_url"] = covers[str(self.ranobe_volume)]
+
+
+
 
     def create_book(self):
         self.book = Book(title=self.ranobe_info_dict["title"],
@@ -48,6 +67,7 @@ class RanobeDownloader:
     def save_book(self):
         book_name = remove_bad_chars(self.ranobe_info_dict["title"]) + f" Том {self.ranobe_volume}.epub"
         if os.path.exists(book_name):
+            print(f'\nФайл {book_name} уже существует. Перезаписываю...')
             os.remove(book_name)
         self.book.save(book_name)
         print(f'\nКнига сохранена как {book_name}')
@@ -68,6 +88,7 @@ if __name__ == "__main__":
     downloader = RanobeDownloader(ranobe_name, ranobe_volume)
     downloader.get_ranobe_info()
     downloader.get_ranobe_chapters()
+    downloader.get_cover()
     downloader.download_cover()
     downloader.create_book()
     downloader.add_chapters_to_book()
