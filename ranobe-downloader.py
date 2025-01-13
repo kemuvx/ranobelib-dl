@@ -2,7 +2,6 @@ import os
 import time
 import shutil
 import requests
-import utils
 from utils import get_ranobe_info, get_volume_chapters, download_cover, remove_bad_chars, get_ranobe_name_from_url, Book, style, ChapterContentParser
 TIME_TO_SLEEP = 0.5 # задержка между запросами к каждой главе
 
@@ -15,8 +14,7 @@ class RanobeDownloader:
         self.book = None
 
     def get_ranobe_info(self):
-        url_to_ranobe = f"https://api.lib.social/api/manga/{self.ranobe_name}"
-        print(url_to_ranobe)
+        url_to_ranobe = f"https://api.lib.social/api/manga/{self.ranobe_name}" 
         self.ranobe_info_dict = get_ranobe_info(url_to_ranobe)
         return self.ranobe_info_dict
 
@@ -26,7 +24,7 @@ class RanobeDownloader:
         return self.ranobe_chapters_dict
 
     def download_cover(self):
-        utils.download_cover(self.ranobe_info_dict["cover_url"])
+        download_cover(self.ranobe_info_dict["cover_url"])
 
     def get_cover(self):
         url_to_covers = f"https://api2.mangalib.me/api/manga/{self.ranobe_name}/covers"
@@ -35,7 +33,7 @@ class RanobeDownloader:
         covers = {}
         for item in json_data["data"]:
             volume_num = item["info"]
-            cover_url = item["cover"]["default"]
+            cover_url = item["cover"]["orig"]
             covers[volume_num] = cover_url
 
         if len(covers) > 1 and str(self.ranobe_volume) in covers:
