@@ -269,7 +269,11 @@ class ChapterContentParser:
             else:
                 raise Exception("Новый тип элемента, надо обработать", element)
         return content
-
+    def _save_image(self, img_url: str, img_path: str):
+        """Скачивает и сохраняет картинку."""
+        img_content = requests.get(img_url, headers=self.headers).content
+        with open(img_path, 'wb') as f:
+            f.write(img_content)    
 
     def _process_images(self, element, attachments, image_counter, content):
         for image in element['attrs']['images']:
