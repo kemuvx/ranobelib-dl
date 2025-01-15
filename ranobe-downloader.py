@@ -45,12 +45,8 @@ class RanobeDownloader:
     def fetch_cover_image(self):
         url_to_covers = f"https://api2.mangalib.me/api/manga/{self.ranobe_name}/covers"
         json_data = requests.get(url_to_covers).json()
-        covers = {}
-        for item in json_data["data"]:
-            volume_num = item["info"]
-            cover_url = item["cover"]["orig"]
-            covers[volume_num] = cover_url
-        if len(covers) > 1 and str(self.ranobe_volume) in covers:
+        covers = {item["info"]: item["cover"]["orig"] for item in json_data["data"] if item["info"] and "orig" in item["cover"]}
+        if str(self.ranobe_volume) in covers:
             self.ranobe_info_dict["cover_url"] = covers[str(self.ranobe_volume)]
 
 
