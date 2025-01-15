@@ -185,34 +185,6 @@ def get_ranobe_name_from_url(url: str) -> str:
         raise Exception("Invalid URL", url)
     return url
 
-
-def get_ranobe_info(url: str) -> dict:
-    """Парсит cover_url, author, title, description"""
-    response = requests.get(url, headers=headers)
-    data = response.json()['data']
-    return {
-        'cover_url': data.get('cover', {}).get('default', ''),
-        'author': data.get('authors', [{}])[0].get('rus_name') or data.get('authors', [{}])[0].get('name','Unknown Author'),
-        'title': data.get('rus_name', data.get('name', '')),
-        'description': data.get('summary', '')
-    }
-
-def get_volume_chapters(url: str, volume: str) -> dict:
-    """Парсит номер и название глав"""
-    response = requests.get(url, headers=headers)
-    data = response.json()['data']
-    return {
-        chapter['number']: (chapter['name'] if chapter['name'].strip() else f"Глава {chapter['number']}")
-        for chapter in data if chapter.get('volume') == volume
-    }
-
-
-def download_cover(url: str) -> None:
-    cover_data = requests.get(url, headers=headers).content
-    with open('cover/cover.jpg', 'wb') as handler:
-        handler.write(cover_data)
-
-
 def remove_bad_chars(text: str) -> str:
     return ''.join(c for c in text if c not in r'"?<>|\/:–')
 
@@ -225,7 +197,7 @@ class ChapterContentParser:
         self.chapter_name = chapter_name
         self.headers = headers
         self.images_dict = {}
-        os.makedirs("images", exist_ok=True)  # Ensure images directory exists
+        os.makedirs("images", exist_ok=True)
 
     def fetch_content(self) -> tuple[str, dict]:
         """Парсит и анализирует главу"""
@@ -298,11 +270,6 @@ class ChapterContentParser:
                 raise Exception("Новый тип элемента, надо обработать", element)
         return content
 
-    def _save_image(self, img_url: str, img_path: str):
-        """Скачивает и сохраняет картинку."""
-        img_content = requests.get(img_url, headers=self.headers).content
-        with open(img_path, 'wb') as f:
-            f.write(img_content)
 
     def _process_images(self, element, attachments, image_counter, content):
         for image in element['attrs']['images']:
@@ -379,23 +346,6 @@ class ChapterContentParser:
         return quote_content
     def _process_horizontal_rule(self, element):
         return "\n"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
