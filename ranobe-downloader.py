@@ -14,7 +14,7 @@ class RanobeDownloader:
         self.book = None
 
     def get_ranobe_info(self):
-        url_to_ranobe = f"https://api.lib.social/api/manga/{self.ranobe_name}" 
+        url_to_ranobe = f"https://api.lib.social/api/manga/{self.ranobe_name}?fields[]=background&fields[]=eng_name&fields[]=otherNames&fields[]=summary&fields[]=releaseDate&fields[]=type_id&fields[]=caution&fields[]=views&fields[]=close_view&fields[]=rate_avg&fields[]=rate&fields[]=genres&fields[]=tags&fields[]=teams&fields[]=user&fields[]=franchise&fields[]=authors&fields[]=publisher&fields[]=userRating&fields[]=moderated&fields[]=metadata&fields[]=metadata.count&fields[]=metadata.close_comments&fields[]=manga_status_id&fields[]=chap_count&fields[]=status_id&fields[]=artists&fields[]=format" 
         self.ranobe_info_dict = get_ranobe_info(url_to_ranobe)
         return self.ranobe_info_dict
 
