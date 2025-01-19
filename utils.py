@@ -266,6 +266,8 @@ class ChapterContentParser:
                 content += self._process_blockquote(element)
             elif element['type'] == "horizontalRule":
                 content += self._process_horizontal_rule(element)
+            elif element['type'] == "orderedList":
+                content += self._process_ordered_list(element)
             else:
                 raise Exception("Новый тип элемента, надо обработать", element)
         return content
@@ -287,15 +289,22 @@ class ChapterContentParser:
         return content, image_counter
 
     def _process_paragraph(self, element):
-        paragraph_content = ""
+        paragraph_content = "<p>"
         for line in element.get("content", []):
             if line['type'] == 'text':
-                text = f"<i>{line['text']}</i>" if any(mark['type'] == "italic" for mark in line.get('marks', [])) else line['text']
-                paragraph_content += f"<p>{text}</p>\n"
+                text = line['text']
+                if any(mark['type'] == "italic" for mark in line.get('marks', [])):
+                    text = f"<i>{text}</i>"
+                if any(mark['type'] == "bold" for mark in line.get('marks', [])):
+                    text = f"<b>{text}</b>"
+                if any(mark['type'] == "italic" and mark['type'] == "bold" for mark in line.get('marks', [])):
+                    text = f"<i><b>{text}</b></i>"
+                paragraph_content += f"{text}"
             elif line['type'] == 'hardBreak':
                 paragraph_content += "<br>\n"
             else:
                 raise Exception("Другой тип элемента, надо обработать", line + " in" + element)
+        paragraph_content += "</p>\n"
         return paragraph_content
 
     def _process_heading(self, element):
@@ -350,6 +359,38 @@ class ChapterContentParser:
         return quote_content
     def _process_horizontal_rule(self, element):
         return "\n"
+    
+    def _process_ordered_list(self, element):
+        list_content = ""
+        for item in element.get("content", []):
+            if item['type'] == 'listItem':
+                for sub_item in item.get("content", []):
+                    if sub_item['type'] == 'paragraph':
+                        paragraph_text = "<p>"
+                        for content_item in sub_item.get("content", []):
+                            if content_item['type'] == 'text':
+                                text = content_item['text']
+                                
+                                # Обработка маркировок (например, жирный текст)
+                                if any(mark.get('type') == "italic" for mark in content_item.get('marks', [])):
+                                    text = f"<i>{text}</i>"
+                                if any(mark.get('type') == "bold" for mark in content_item.get('marks', [])):
+                                    text = f"<b>{text}</b>"
+                                if any(mark.get('type') == "italic" and mark.get('type') == "bold" for mark in content_item.get('marks', [])):
+                                    text = f"<i><b>{text}</b></i>"
+
+                                paragraph_text += text
+                            else:
+                                raise Exception("Другой тип элемента, надо обработать", content_item)
+
+                        paragraph_text += "</p>"
+                        list_content += f"<li>{paragraph_text}</li>\n"
+                    else:
+                        raise Exception("Другой тип элемента, надо обработать", sub_item)
+            else:
+                raise Exception("Другой тип элемента, надо обработать", item)
+
+        return f"<ol>\n{list_content}</ol>\n"
 
 
 
