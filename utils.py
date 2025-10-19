@@ -9,15 +9,32 @@ import pathlib
 import tempfile
 import uuid
 import zipfile
+from dotenv import load_dotenv
+
+load_dotenv()
 
 headers = {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.3',
-    'Accept-Encoding': 'none',
-    'Accept-Language': 'en-US,en;q=0.8',
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
+    'Accept': '*/*',
+    'Accept-Language': 'ru,en-US;q=0.7,en;q=0.3',
+    'Accept-Encoding': 'gzip, deflate, br, zstd',
+    'Referer': 'https://ranobelib.me/',
+    'Site-Id': '3',
+    'Content-Type': 'application/json',
+    'Client-Time-Zone': 'Asia/Krasnoyarsk',
+    'Origin': 'https://ranobelib.me',
+    'DNT': '1',
+    'Sec-GPC': '1',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'cross-site',
     'Connection': 'keep-alive'
 }
+# Токен авторизации для ранобе доступных только авторизованным пользователям
+token = os.getenv("RANOBELIB_AUTH_TOKEN")
+if token:
+    headers['Authorization'] = token
+
 style = """
 @page {
     margin-bottom: 5pt;
