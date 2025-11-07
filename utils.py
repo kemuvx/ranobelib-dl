@@ -224,11 +224,11 @@ class ChapterContentParser:
 
 
         try: # Проверка легаси глава или нет
-            json_response['data']['content']['type'] == "doc"  # если выдает ошибку значит легаси
+            json_response['data']['content']['type']  # если выдает ошибку значит легаси
             is_legacy = False
         except TypeError:
             is_legacy = True
-        print(f"\nГлава {self.chapter_num}: {self.chapter_name}: {self.url}")
+        print(f"\nГлава {self.chapter_num}: {self.chapter_name}")
         
 
         if is_legacy:
@@ -252,8 +252,8 @@ class ChapterContentParser:
                 img_url = "https://ranobelib.me" + img_url
             if img_url.count("ranobelib.me") > 1:
                 img_url = img_url[20:]
-                print(f"Арт {self.chapter_num}-{image_counter}: " + img_url)
-                
+            print(f"Загрузка арта {self.chapter_num}-{image_counter}")
+
             img_path = os.path.join("images", f"{self.chapter_num}-{image_counter}.jpg")
             self._save_image(img_url, img_path)
             self.images_dict[str(image_counter)] = img_path
@@ -302,7 +302,12 @@ class ChapterContentParser:
                 self._save_image(img_url, img_path)
                 content += f'<p><img src="{img_path}"></img></p>\n'
                 self.images_dict[str(image_counter)] = img_path
+
+                print(f"Загрузка арта {self.chapter_num}-{image_counter}")
+                
                 image_counter += 1
+
+                
         return content, image_counter
 
     def _process_paragraph(self, element):
@@ -310,13 +315,16 @@ class ChapterContentParser:
         for line in element.get("content", []):
             if line['type'] == 'text':
                 text = line['text']
-                if any(mark['type'] == "italic" for mark in line.get('marks', [])):
+
+                marks = [mark['type'] for mark in line.get('marks', [])]
+                if "italic" in marks and "bold" in marks:
+                    text = f"<b><i>{text}</i></b>"
+                elif "italic" in marks:
                     text = f"<i>{text}</i>"
-                if any(mark['type'] == "bold" for mark in line.get('marks', [])):
+                elif "bold" in marks:
                     text = f"<b>{text}</b>"
-                if any(mark['type'] == "italic" and mark['type'] == "bold" for mark in line.get('marks', [])):
-                    text = f"<i><b>{text}</b></i>"
                 paragraph_content += f"{text}"
+
             elif line['type'] == 'hardBreak':
                 paragraph_content += "<br>\n"
             else:
@@ -375,7 +383,7 @@ class ChapterContentParser:
                 raise Exception("Другой тип элемента, надо обработать", item)
         return quote_content
     def _process_horizontal_rule(self, element):
-        return "\n"
+        return "<hr />"
     
     def _process_ordered_list(self, element):
         list_content = ""
@@ -388,7 +396,6 @@ class ChapterContentParser:
                             if content_item['type'] == 'text':
                                 text = content_item['text']
                                 
-                                # Обработка маркировок (например, жирный текст)
                                 if any(mark.get('type') == "italic" for mark in content_item.get('marks', [])):
                                     text = f"<i>{text}</i>"
                                 if any(mark.get('type') == "bold" for mark in content_item.get('marks', [])):
