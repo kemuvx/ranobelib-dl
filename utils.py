@@ -271,28 +271,40 @@ class ChapterContentParser:
         attachments = {att['name']: f"https://ranobelib.me{att['url']}" for att in data.get('attachments', [])}
         
         for element in data['content']['content']:
-            if element['type'] == 'image':
-                content, image_counter = self._process_images(element, attachments, image_counter, content)
-            elif element['type'] == "paragraph":
-                content += self._process_paragraph(element)
-            elif element['type'] == "heading":
-                content += self._process_heading(element)
-            elif element['type'] == "bulletList":
-                content += self._process_bullet_list(element)
-            elif element['type'] == "blockquote":
-                content += self._process_blockquote(element)
-            elif element['type'] == "horizontalRule":
-                content += self._process_horizontal_rule(element)
-            elif element['type'] == "orderedList":
-                content += self._process_ordered_list(element)
-            else:
-                raise Exception("Новый тип элемента, надо обработать", element)
+            content = self._parse_element(element, attachments, image_counter, content)
+            if isinstance(content, tuple):
+                content, image_counter = content
         return content
+
+    def _parse_element(self, element: dict, attachments: dict = None, image_counter: int = 1, current_content: str = "") -> str | tuple:
+        """Рекурсивно парсит любой элемент"""
+        element_type = element['type']
+        
+        if element_type == 'image':
+            return self._process_images(element, attachments, image_counter, current_content)
+        elif element_type == "paragraph":
+            return current_content + self._process_paragraph(element)
+        elif element_type == "heading":
+            return current_content + self._process_heading(element)
+        elif element_type == "bulletList":
+            return current_content + self._process_bullet_list(element)
+        elif element_type == "blockquote":
+            return current_content + self._process_blockquote(element)
+        elif element_type == "horizontalRule":
+            return current_content + self._process_horizontal_rule(element)
+        elif element_type == "orderedList":
+            return current_content + self._process_ordered_list(element)
+        elif element_type == "text":
+            return current_content + self._process_text_element(element)
+        else:
+            print(f"Неизвестный тип элемента: {element_type}")
+            return current_content
+
     def _save_image(self, img_url: str, img_path: str):
         """Скачивает и сохраняет картинку."""
         img_content = requests.get(img_url, headers=self.headers).content
         with open(img_path, 'wb') as f:
-            f.write(img_content)    
+            f.write(img_content)
 
     def _process_images(self, element, attachments, image_counter, content):
         for image in element['attrs']['images']:
@@ -302,119 +314,126 @@ class ChapterContentParser:
                 self._save_image(img_url, img_path)
                 content += f'<p><img src="{img_path}"></img></p>\n'
                 self.images_dict[str(image_counter)] = img_path
-
                 print(f"Загрузка арта {self.chapter_num}-{image_counter}")
-                
                 image_counter += 1
-
-                
         return content, image_counter
 
+    def _process_text_element(self, element):
+        """Обрабатывает текстовый элемент с форматированием"""
+        text = element.get('text', '')
+        marks = element.get('marks', [])
+        
+        if any(mark['type'] == "italic" for mark in marks) and any(mark['type'] == "bold" for mark in marks):
+            text = f"<b><i>{text}</i></b>"
+        elif any(mark['type'] == "italic" for mark in marks):
+            text = f"<i>{text}</i>"
+        elif any(mark['type'] == "bold" for mark in marks):
+            text = f"<b>{text}</b>"
+        
+        return text
+
     def _process_paragraph(self, element):
+        """Рекурсивно обрабатывает параграф с вложенными элементами"""
         paragraph_content = "<p>"
-        for line in element.get("content", []):
-            if line['type'] == 'text':
-                text = line['text']
-
-                marks = [mark['type'] for mark in line.get('marks', [])]
-                if "italic" in marks and "bold" in marks:
-                    text = f"<b><i>{text}</i></b>"
-                elif "italic" in marks:
-                    text = f"<i>{text}</i>"
-                elif "bold" in marks:
-                    text = f"<b>{text}</b>"
-                paragraph_content += f"{text}"
-
-            elif line['type'] == 'hardBreak':
+        
+        for child in element.get("content", []):
+            if child['type'] == 'text':
+                paragraph_content += self._process_text_element(child)
+            elif child['type'] == 'hardBreak':
                 paragraph_content += "<br>\n"
             else:
-                raise Exception("Другой тип элемента, надо обработать", line + " in" + element)
+                paragraph_content = self._parse_element(child, None, 1, paragraph_content)
+                if isinstance(paragraph_content, tuple):
+                    paragraph_content = paragraph_content[0]
+        
         paragraph_content += "</p>\n"
         return paragraph_content
 
     def _process_heading(self, element):
+        """Рекурсивно обрабатывает заголовок с вложенными элементами"""
         heading_level = element.get("attrs", {}).get("level", 3)
         heading_content = ""
 
-        for line in element.get("content", []):
-            if line['type'] == 'text':
-                text = line['text']
-                
-                if any(mark['type'] == "bold" for mark in line.get('marks', [])):
-                    text = f"<b>{text}</b>"
-
-                heading_content += text
+        for child in element.get("content", []):
+            if child['type'] == 'text':
+                heading_content += self._process_text_element(child)
             else:
-                raise Exception("Другой тип элемента, надо обработать", line + " in" + element)
-
+                heading_content = self._parse_element(child, None, 1, heading_content)
+                if isinstance(heading_content, tuple):
+                    heading_content = heading_content[0]
+        
         return f"<h{heading_level}>{heading_content}</h{heading_level}>\n"
 
     def _process_bullet_list(self, element):
-        list_content = ""
+        """Рекурсивно обрабатывает маркированный список"""
+        list_content = "<ul>\n"
+        
         for item in element.get("content", []):
             if item['type'] == 'listItem':
-                for sub_item in item.get("content", []):
-                    if sub_item['type'] == 'paragraph':
-                        paragraph_text = ""
-                        for content_item in sub_item.get("content", []):
-                            if content_item['type'] == 'text':
-                                paragraph_text += content_item['text']
-                            else:
-                                raise Exception("Другой тип элемента, надо обработать", content_item + " in" + sub_item)
-                        list_content += f"<p><li>{paragraph_text}</li></p>\n"
+                list_content += "<li>"
+                for child in item.get("content", []):
+                    if child['type'] == 'paragraph':
+                        list_content += self._process_paragraph(child).replace('<p>', '').replace('</p>', '')
+                    elif child['type'] == 'bulletList':
+                        list_content += self._process_bullet_list(child)
+                    elif child['type'] == 'orderedList':
+                        list_content += self._process_ordered_list(child)
                     else:
-                        raise Exception("Другой тип элемента, надо обработать", sub_item + " in" + item)
-            else:
-                raise Exception("Другой тип элемента, надо обработать", item)
+                        list_content = self._parse_element(child, None, 1, list_content)
+                        if isinstance(list_content, tuple):
+                            list_content = list_content[0]
+                
+                list_content += "</li>\n"
+        
+        list_content += "</ul>\n"
+        return list_content
+
+    def _process_ordered_list(self, element):
+        """Рекурсивно обрабатывает нумерованный список"""
+        list_content = "<ol>\n"
+        
+        for item in element.get("content", []):
+            if item['type'] == 'listItem':
+                list_content += "<li>"
+                
+                for child in item.get("content", []):
+                    if child['type'] == 'paragraph':
+                        list_content += self._process_paragraph(child).replace('<p>', '').replace('</p>', '')
+                    elif child['type'] == 'bulletList':
+                        list_content += self._process_bullet_list(child)
+                    elif child['type'] == 'orderedList':
+                        list_content += self._process_ordered_list(child)
+                    else:
+                        list_content = self._parse_element(child, None, 1, list_content)
+                        if isinstance(list_content, tuple):
+                            list_content = list_content[0]
+                
+                list_content += "</li>\n"
+        
+        list_content += "</ol>\n"
         return list_content
 
     def _process_blockquote(self, element):
-        quote_content = ""
-        for item in element.get("content", []):
-            if item['type'] == 'paragraph':
-                paragraph_text = ""
-                for sub_item in item.get("content", []):
-                    if sub_item['type'] == 'text':
-                        paragraph_text += sub_item['text']
-                    else:
-                        raise Exception("Другой тип элемента, надо обработать", sub_item + " in" + item)
-                quote_content += f"<blockquote><p>{paragraph_text}</p></blockquote>\n"
+        """Рекурсивно обрабатывает цитату с вложенными элементами"""
+        quote_content = "<blockquote>"
+        
+        for child in element.get("content", []):
+            if child['type'] == 'paragraph':
+                quote_content += self._process_paragraph(child)
+            elif child['type'] == 'bulletList':
+                quote_content += self._process_bullet_list(child)
+            elif child['type'] == 'orderedList':
+                quote_content += self._process_ordered_list(child)
             else:
-                raise Exception("Другой тип элемента, надо обработать", item)
+                quote_content = self._parse_element(child, None, 1, quote_content)
+                if isinstance(quote_content, tuple):
+                    quote_content = quote_content[0]
+        
+        quote_content += "</blockquote>\n"
         return quote_content
+
     def _process_horizontal_rule(self, element):
         return "<hr />"
-    
-    def _process_ordered_list(self, element):
-        list_content = ""
-        for item in element.get("content", []):
-            if item['type'] == 'listItem':
-                for sub_item in item.get("content", []):
-                    if sub_item['type'] == 'paragraph':
-                        paragraph_text = "<p>"
-                        for content_item in sub_item.get("content", []):
-                            if content_item['type'] == 'text':
-                                text = content_item['text']
-                                
-                                if any(mark.get('type') == "italic" for mark in content_item.get('marks', [])):
-                                    text = f"<i>{text}</i>"
-                                if any(mark.get('type') == "bold" for mark in content_item.get('marks', [])):
-                                    text = f"<b>{text}</b>"
-                                if any(mark.get('type') == "italic" and mark.get('type') == "bold" for mark in content_item.get('marks', [])):
-                                    text = f"<i><b>{text}</b></i>"
-
-                                paragraph_text += text
-                            else:
-                                raise Exception("Другой тип элемента, надо обработать", content_item)
-
-                        paragraph_text += "</p>"
-                        list_content += f"<li>{paragraph_text}</li>\n"
-                    else:
-                        raise Exception("Другой тип элемента, надо обработать", sub_item)
-            else:
-                raise Exception("Другой тип элемента, надо обработать", item)
-
-        return f"<ol>\n{list_content}</ol>\n"
 
 
 
