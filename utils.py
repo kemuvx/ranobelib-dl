@@ -192,14 +192,14 @@ style = """
 """
 
 
-def get_ranobe_name_from_url(url: str) -> str:
+def get_ranobe_name_from_url(url: str) -> str | bool:
     url = url.strip()
-    if "https://" in url and "/read/" in url:
+    if url.startswith("https://") and "/read/" in url:
         url = url.split("//")[1].split("/")[2]
-    elif "https://" in url:
+    elif url.startswith("https://"):
         url = url.split("//")[1].split("/")[3].split("?")[0]
     else:
-        raise Exception("Invalid URL", url)
+        return False
     return url
 
 def remove_bad_chars(text: str) -> str:
@@ -208,14 +208,13 @@ def remove_bad_chars(text: str) -> str:
 
 
 class ChapterContentParser:
-    def __init__(self, url: str, chapter_num: str, chapter_name: str):
+    def __init__(self, url: str, chapter_num: str, chapter_name: str, folder_name: str):
         self.url = url
         self.chapter_num = chapter_num
         self.chapter_name = chapter_name
         self.headers = headers
         self.images_dict = {}
-        os.makedirs("images", exist_ok=True)
-
+        self.folder_name = folder_name
     def fetch_content(self) -> tuple[str, dict]:
         """Парсит и анализирует главу"""
         response = requests.get(self.url, headers=self.headers)
@@ -253,11 +252,12 @@ class ChapterContentParser:
             if img_url.count("ranobelib.me") > 1:
                 img_url = img_url[20:]
             print(f"Загрузка арта {self.chapter_num}-{image_counter}")
+            folder_img_path = f"{self.folder_name}images/{self.chapter_num}-{image_counter}.jpg"
+            epub_img_path = f"images/{self.chapter_num}-{image_counter}.jpg"
 
-            img_path = os.path.join("images", f"{self.chapter_num}-{image_counter}.jpg")
-            self._save_image(img_url, img_path)
-            self.images_dict[str(image_counter)] = img_path
-            img['src'] = img_path
+            self._save_image(img_url, folder_img_path)
+            self.images_dict[str(image_counter)] = folder_img_path
+            img['src'] = epub_img_path
             image_counter += 1
 
         
@@ -310,10 +310,11 @@ class ChapterContentParser:
         for image in element['attrs']['images']:
             img_url = attachments.get(image['image'])
             if img_url:
-                img_path = os.path.join("images", f"{self.chapter_num}-{image_counter}.jpg")
-                self._save_image(img_url, img_path)
-                content += f'<p><img src="{img_path}"></img></p>\n'
-                self.images_dict[str(image_counter)] = img_path
+                folder_img_path = f"{self.folder_name}images/{self.chapter_num}-{image_counter}.jpg"
+                epub_img_path = "images/{self.chapter_num}-{image_counter}.jpg"
+                self._save_image(img_url, folder_img_path)
+                content += f'<p><img src="{epub_img_path}"></img></p>\n'
+                self.images_dict[str(image_counter)] = folder_img_path
                 print(f"Загрузка арта {self.chapter_num}-{image_counter}")
                 image_counter += 1
         return content, image_counter
