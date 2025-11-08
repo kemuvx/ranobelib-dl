@@ -5,6 +5,8 @@ import requests
 from utils import remove_bad_chars, get_ranobe_name_from_url, headers, style, Book,  ChapterContentParser
 TIME_TO_SLEEP = 0.5  # задержка между запросами к каждой главе
 
+ADD_FOLDER = True  # Добавлять ли папку с названием ранобе
+
 class RanobeDownloader:
     base_url = "https://api.cdnlibs.org"
 
@@ -23,7 +25,7 @@ class RanobeDownloader:
         self.volume_chapters_dict = {}
 
         self.book = None
-
+        self.folder_name = ""
 
     def fetch_ranobe_info(self):
         # ranobe info
@@ -43,6 +45,8 @@ class RanobeDownloader:
         self.data = data
         print(f"{self.info_dict['title']} от {self.info_dict['author']}")
 
+        if ADD_FOLDER:
+            self.folder_name = f"{self.info_dict['title']} Том {self.volume}/"
 
 
         # ranobe chapters
@@ -58,8 +62,6 @@ class RanobeDownloader:
                     "name": chapter['name'],
                     "available_branch_ids": [branch["branch_id"] for branch in chapter.get("branches")]
                     }
-        
-
         self._select_translation_team()
 
 
@@ -189,7 +191,7 @@ class RanobeDownloader:
 
     def download_cover_image(self):
         cover_data = requests.get(self.info_dict["cover_url"], headers=headers).content
-        with open('cover/cover.jpg', 'wb') as handler:
+        with open(f'{self.folder_name}cover/cover.jpg', 'wb') as handler:
             handler.write(cover_data)
 
     def fetch_cover_image(self):
@@ -203,7 +205,7 @@ class RanobeDownloader:
         self.book = Book(title=self.info_dict["title"],
                          author=self.info_dict["author"],
                          description=self.info_dict["description"])
-        with open('cover/cover.jpg', 'rb') as file:
+        with open(f'{self.folder_name}cover/cover.jpg', 'rb') as file:
             self.book.set_cover(file.read())
         self.book.set_stylesheet(style)
 
@@ -224,39 +226,42 @@ class RanobeDownloader:
                   f"{f'branch_id={self.chosen_branch_id}&' if self.has_branches else ''}"
                   f"number={chapter_num}&volume={self.volume}")
             
-            parser = ChapterContentParser(url=url_to_chapter, chapter_num=chapter_num, chapter_name=chapter_name)
+            parser = ChapterContentParser(url=url_to_chapter, chapter_num=chapter_num, chapter_name=chapter_name, folder_name=self.folder_name)
 
             chapter_content, images_dict = parser.fetch_content()
             self.book.add_page(title=f"Глава {chapter_num}. {chapter_name}", content=chapter_content)
             if images_dict:
                 for image in images_dict.values():
                     with open(image, 'rb') as image_file:
-                        self.book.add_image(image[7:], image_file.read())
+                        self.book.add_image(image.split("/")[-1] , image_file.read())
             time.sleep(TIME_TO_SLEEP)  # Чтобы не получить error 429
 
     def save_book_to_file(self):
         book_name = remove_bad_chars(self.info_dict["title"]) + f" Том {self.volume}.epub"
-        if os.path.exists(book_name):
+        book_path = f"{self.folder_name}{book_name}"
+        if os.path.exists(book_path):
             print(f'\nФайл {book_name} уже существует. Перезаписываю...')
-            os.remove(book_name)
-        self.book.save(book_name)
-        print(f'\nКнига сохранена как {book_name}')
+            os.remove(book_path)
+        self.book.save(book_path)
+        print(f'\nКнига сохранена как {book_name} в папке {self.folder_name}')
 
+    def create_folders(self):
+        shutil.rmtree(f"{self.folder_name}cover", ignore_errors=True)
+        shutil.rmtree(f"{self.folder_name}images", ignore_errors=True)
+        os.makedirs(f"{self.folder_name}cover", exist_ok=True)
+        os.makedirs(f"{self.folder_name}images", exist_ok=True)
 
 if __name__ == "__main__":
-    shutil.rmtree("cover", ignore_errors=True)
-    shutil.rmtree("images", ignore_errors=True)
-    os.makedirs("cover", exist_ok=True)
-    os.makedirs("images", exist_ok=True)
-    
     while True:
         url = input("Ссылка на ранобе: ").strip()
         if not url:
             print("URL не может быть пустым. Попробуйте снова.")
             continue
+        name = get_ranobe_name_from_url(url)
+        if name == False:
+            print("Неправильная ссылка, попробуйте снова")
+            continue
         break
-    name = get_ranobe_name_from_url(url)
-        
     while True:
         volume_input = input("Том: ").strip()
         if volume_input.isdigit() and int(volume_input) > 0:
@@ -267,6 +272,7 @@ if __name__ == "__main__":
         
     downloader = RanobeDownloader(name, ranobe_volume)
     downloader.fetch_ranobe_info()
+    downloader.create_folders()
     downloader.fetch_cover_image()
     downloader.download_cover_image()
     downloader.create_book_object()
