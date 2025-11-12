@@ -31,8 +31,10 @@ headers = {
     'Connection': 'keep-alive'
 }
 # Токен авторизации для ранобе доступных только авторизованным пользователям
-token = os.getenv("RANOBELIB_AUTH_TOKEN")
+token = os.getenv("RANOBELIB_AUTH_TOKEN").strip()
 if token:
+    if not token.startswith("Bearer "):
+        token = "Bearer " + token
     headers['Authorization'] = token
 
 style = """
