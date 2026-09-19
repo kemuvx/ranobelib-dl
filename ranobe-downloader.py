@@ -2,7 +2,7 @@ import os
 import time
 import shutil
 import requests
-from utils import remove_bad_chars, get_ranobe_name_from_url, headers, style, Book,  ChapterContentParser
+from utils import remove_bad_chars, get_ranobe_name_from_url, headers, style, Book, ChapterContentParser, make_chapter_title, extract_text_from_prosemirror
 TIME_TO_SLEEP = 0.5  # задержка между запросами к каждой главе
 
 ADD_FOLDER = True  # Добавлять ли папку с названием ранобе
@@ -10,10 +10,11 @@ ADD_FOLDER = True  # Добавлять ли папку с названием р
 class RanobeDownloader:
     base_url = "https://api.cdnlibs.org"
 
-    def __init__(self, name, volume):
+    def __init__(self, name, volume=None):
         self.data = None  
         self.name = name
-        self.volume = volume
+        self.volume = volume          # None → whole-book mode
+        self.volumes = []             # populated in fetch_ranobe_info
         self.info_dict = None
         
         
@@ -22,10 +23,11 @@ class RanobeDownloader:
         self.has_branches = True
 
         self.chapters_data = None
-        self.volume_chapters_dict = {}
+        self.volume_chapters_dict = {}  # single-vol: {num→info}; whole-book: {vol→{num→info}}
 
         self.book = None
         self.folder_name = ""
+        self.covers_by_vol = {}   # {"1": url, "2": url, …} — populated in fetch_cover_image
 
     def fetch_ranobe_info(self):
         # ranobe info
@@ -40,13 +42,16 @@ class RanobeDownloader:
             'cover_url': data.get('cover', {}).get('default', ''),
             'author': data.get('authors', [{}])[0].get('rus_name') or data.get('authors', [{}])[0].get('name', 'Unknown Author'),
             'title': data.get('rus_name', data.get('name', '')),
-            'description': data.get('summary', ''),
+            'description': extract_text_from_prosemirror(data.get('summary', '')),
         }
         self.data = data
         print(f"{self.info_dict['title']} от {self.info_dict['author']}")
 
         if ADD_FOLDER:
-            self.folder_name = f"{self.info_dict['title']} Том {self.volume}/"
+            if self.volume is None:
+                self.folder_name = f"{self.info_dict['title']}/"
+            else:
+                self.folder_name = f"{self.info_dict['title']} Том {self.volume}/"
 
 
         # ranobe chapters
@@ -55,15 +60,37 @@ class RanobeDownloader:
         self.chapters_data = response.json()['data']
         if response.status_code != 200:
             raise Exception(f"Failed to fetch chapters: {response.status_code}")
-        
-        for chapter in self.chapters_data:
-            if chapter.get('volume') == self.volume:
-                self.volume_chapters_dict[chapter['number']] =  {
+
+        if self.volume is None:
+            # whole-book mode: collect every volume in API order, then sort numerically
+            for chapter in self.chapters_data:
+                vol = chapter.get('volume')
+                if vol not in self.volumes:
+                    self.volumes.append(vol)
+                self.volume_chapters_dict.setdefault(vol, {})[chapter['number']] = {
                     "name": chapter['name'],
-                    "available_branch_ids": [branch["branch_id"] for branch in chapter.get("branches")]
+                    "available_branch_ids": [branch["branch_id"] for branch in chapter.get("branches", [])]
+                }
+            # Sort so Vol 1 comes first regardless of API return order
+            self.volumes.sort(key=lambda v: float(str(v)))
+        else:
+            self.volumes = [self.volume]
+            for chapter in self.chapters_data:
+                if chapter.get('volume') == self.volume:
+                    self.volume_chapters_dict[chapter['number']] = {
+                        "name": chapter['name'],
+                        "available_branch_ids": [branch["branch_id"] for branch in chapter.get("branches", [])]
                     }
         self._select_translation_team()
 
+
+    def _all_chapter_infos(self):
+        """Yield every chapter-info dict regardless of single-vol or whole-book dict layout."""
+        if self.volume is None:
+            for vol_chapters in self.volume_chapters_dict.values():
+                yield from vol_chapters.values()
+        else:
+            yield from self.volume_chapters_dict.values()
 
     def _select_translation_team(self):
         teams = self.data.get("teams", [])
@@ -119,9 +146,10 @@ class RanobeDownloader:
         
         branch_chapter_numbers = {}
         for branch_id in teams_dict.keys():
-            team_chapters = len([chapter for chapter in self.volume_chapters_dict.values() 
-                                if branch_id in chapter["available_branch_ids"]])
+            team_chapters = len([ch for ch in self._all_chapter_infos()
+                                 if branch_id in ch["available_branch_ids"]])
             branch_chapter_numbers[branch_id] = team_chapters
+
                 
         
         available_teams = {}
@@ -197,12 +225,30 @@ class RanobeDownloader:
     def fetch_cover_image(self):
         url_to_covers = f"{self.base_url}/api/manga/{self.name}/covers"
         json_data = requests.get(url_to_covers).json()
-        covers = {item["info"]: item["cover"]["orig"] for item in json_data["data"] if item["info"] and "orig" in item["cover"]}
-        if str(self.volume) in covers:
-            self.info_dict["cover_url"] = covers[str(self.volume)]
+
+        # Build vol-number → orig-url mapping (items with info=null are the global default)
+        self.covers_by_vol = {
+            item["info"]: item["cover"]["orig"]
+            for item in json_data["data"]
+            if item["info"] and "orig" in item["cover"]
+        }
+
+        if self.volume is None:
+            # whole-book mode: main EPUB cover = first volume's cover, or keep default
+            first_vol = str(self.volumes[0]) if self.volumes else None
+            if first_vol and first_vol in self.covers_by_vol:
+                self.info_dict["cover_url"] = self.covers_by_vol[first_vol]
+            # if no per-vol cover exists for vol 1, self.info_dict["cover_url"] stays
+            # as the default cover already set in fetch_ranobe_info — no change needed
+        else:
+            # single-volume mode: existing behaviour
+            if str(self.volume) in self.covers_by_vol:
+                self.info_dict["cover_url"] = self.covers_by_vol[str(self.volume)]
 
     def create_book_object(self):
-        self.book = Book(title=self.info_dict["title"],
+        title = (self.info_dict["title"] if self.volume is None
+                 else f"{self.info_dict['title']} Том {self.volume}")
+        self.book = Book(title=title,
                          author=self.info_dict["author"],
                          description=self.info_dict["description"])
         with open(f'{self.folder_name}cover/cover.jpg', 'rb') as file:
@@ -210,34 +256,81 @@ class RanobeDownloader:
         self.book.set_stylesheet(style)
 
     def add_chapters_to_book_object(self):
+        if self.volume is None:
+            # whole-book: one cover landing page per volume, chapters nested under it
+            default_cover_bytes = None  # downloaded at most once, reused as fallback
 
-        chosen_translation_chapters_dict = {
-            chapter_num: chapter_info
-            for chapter_num, chapter_info in self.volume_chapters_dict.items()
-            if self.chosen_branch_id in chapter_info["available_branch_ids"]
-        } if self.has_branches else self.volume_chapters_dict
+            for vol in self.volumes:
+                cover_url = self.covers_by_vol.get(str(vol))
 
+                if cover_url:
+                    print(f"\nЗагрузка обложки Том {vol}...")
+                    cover_bytes = requests.get(cover_url, headers=headers).content
+                else:
+                    # No per-volume cover → use default, downloading it only once
+                    if default_cover_bytes is None:
+                        print("\nОбложка для этого тома не найдена, используется обложка по умолчанию...")
+                        default_cover_bytes = requests.get(
+                            self.info_dict["cover_url"], headers=headers
+                        ).content
+                    cover_bytes = default_cover_bytes
 
-        for chapter_num, chapter_info in chosen_translation_chapters_dict.items():
+                vol_page = self.book.add_cover_page(
+                    title=f"Том {vol}",
+                    cover_data=cover_bytes,
+                )
+                chapters_for_vol = self.volume_chapters_dict.get(vol, {})
+                self._add_volume_chapters(vol, chapters_for_vol, parent=vol_page)
+        else:
+            # single-volume: chapters go straight to root (no parent)
+            self._add_volume_chapters(self.volume, self.volume_chapters_dict, parent=None)
 
-            chapter_name = chapter_info["name"] if chapter_info["name"].strip() else f"Глава {chapter_num}"
-            
-            url_to_chapter = (f"{self.base_url}/api/manga/{self.name}/chapter?"
-                  f"{f'branch_id={self.chosen_branch_id}&' if self.has_branches else ''}"
-                  f"number={chapter_num}&volume={self.volume}")
-            
-            parser = ChapterContentParser(url=url_to_chapter, chapter_num=chapter_num, chapter_name=chapter_name, folder_name=self.folder_name)
+    def _filter_chapters_by_branch(self, chapters_dict: dict) -> dict:
+        """Return only chapters available for the chosen branch (or all if no branching)."""
+        if not self.has_branches:
+            return chapters_dict
+        return {
+            num: info for num, info in chapters_dict.items()
+            if self.chosen_branch_id in info["available_branch_ids"]
+        }
 
+    def _add_volume_chapters(self, volume, chapters_dict: dict, parent):
+        """Fetch every chapter of one volume and add it to the book under `parent`."""
+        chosen = self._filter_chapters_by_branch(chapters_dict)
+        # image filenames are prefixed with volume number to avoid cross-volume collisions
+        image_prefix = f"v{volume}-" if self.volume is None else ""
+        for chapter_num, chapter_info in chosen.items():
+            chapter_name = chapter_info["name"].strip() or f"Глава {chapter_num}"
+            url_to_chapter = (
+                f"{self.base_url}/api/manga/{self.name}/chapter?"
+                f"{'branch_id=' + str(self.chosen_branch_id) + '&' if self.has_branches else ''}"
+                f"number={chapter_num}&volume={volume}"
+            )
+            parser = ChapterContentParser(
+                url=url_to_chapter,
+                chapter_num=chapter_num,
+                chapter_name=chapter_name,
+                folder_name=self.folder_name,
+                image_prefix=image_prefix,
+            )
             chapter_content, images_dict = parser.fetch_content()
-            self.book.add_page(title=f"Глава {chapter_num}. {chapter_name}", content=chapter_content)
+            self.book.add_page(
+                title=make_chapter_title(chapter_num, chapter_name),
+                content=chapter_content,
+                parent=parent,
+            )
             if images_dict:
                 for image in images_dict.values():
                     with open(image, 'rb') as image_file:
-                        self.book.add_image(image.split("/")[-1] , image_file.read())
+                        self.book.add_image(image.split("/")[-1], image_file.read())
             time.sleep(TIME_TO_SLEEP)  # Чтобы не получить error 429
 
+
     def save_book_to_file(self):
-        book_name = remove_bad_chars(self.info_dict["title"]) + f" Том {self.volume}.epub"
+        if self.volume is None:
+            book_name = remove_bad_chars(self.info_dict["title"]) + " (полная версия).epub"
+        else:
+            book_name = remove_bad_chars(self.info_dict["title"]) + f" Том {self.volume}.epub"
         book_path = f"{self.folder_name}{book_name}"
         if os.path.exists(book_path):
             print(f'\nФайл {book_name} уже существует. Перезаписываю...')
@@ -251,6 +344,41 @@ class RanobeDownloader:
         os.makedirs(f"{self.folder_name}cover", exist_ok=True)
         os.makedirs(f"{self.folder_name}images", exist_ok=True)
 
+def parse_volumes(volume_input: str) -> list[str] | None:
+    """Parse volume input into a sorted list of volume strings.
+
+    Accepted formats:
+      - Single volume:      "3"
+      - Space-separated:    "1 2 3"
+      - Range (inclusive):  "1-5"
+      - Mixed:              "1-3 5 7"
+    Returns None if the input is invalid.
+    """
+    volumes = []
+    parts = volume_input.split()
+    for part in parts:
+        if '-' in part:
+            bounds = part.split('-')
+            if len(bounds) != 2 or not bounds[0].isdigit() or not bounds[1].isdigit():
+                return None
+            start, end = int(bounds[0]), int(bounds[1])
+            if start > end or start < 1:
+                return None
+            volumes.extend(range(start, end + 1))
+        elif part.isdigit():
+            volumes.append(int(part))
+        else:
+            return None
+    # deduplicate, sort, convert back to strings
+    seen = set()
+    result = []
+    for v in volumes:
+        if v not in seen:
+            seen.add(v)
+            result.append(str(v))
+    return result or None
+
+
 if __name__ == "__main__":
     while True:
         url = input("Ссылка на ранобе: ").strip()
@@ -262,20 +390,54 @@ if __name__ == "__main__":
             print("Неправильная ссылка, попробуйте снова")
             continue
         break
+
+    print("\nРежим загрузки:")
+    print("  1. Один или несколько томов (отдельные файлы)")
+    print("  2. Вся книга целиком (один файл, вложенное оглавление)")
     while True:
-        volume_input = input("Том: ").strip()
-        if volume_input.isdigit() and int(volume_input) > 0:
-            ranobe_volume = volume_input 
+        mode_input = input("Режим (1/2, по умолчанию 1): ").strip()
+        if mode_input in ("", "1", "2"):
             break
-        else:
-            print("Неверный номер тома. Попробуйте снова")
-        
-    downloader = RanobeDownloader(name, ranobe_volume)
-    downloader.fetch_ranobe_info()
-    downloader.create_folders()
-    downloader.fetch_cover_image()
-    downloader.download_cover_image()
-    downloader.create_book_object()
-    downloader.add_chapters_to_book_object()
-    downloader.save_book_to_file()
+        print("Введите 1 или 2")
+
+    if mode_input == "2":
+        # ── Whole-book mode ──────────────────────────────────────────
+        print("\nСкачивание всей книги в один файл...")
+        downloader = RanobeDownloader(name, volume=None)
+        downloader.fetch_ranobe_info()
+        print(f"Найдено томов: {len(downloader.volumes)}")
+        downloader.create_folders()
+        downloader.fetch_cover_image()
+        downloader.download_cover_image()
+        downloader.create_book_object()
+        downloader.add_chapters_to_book_object()
+        downloader.save_book_to_file()
+        print("\nГотово!")
+    else:
+        # ── Single / multi-volume mode ────────────────────────────────
+        while True:
+            print("Том (или несколько: '1 2 3' / диапазон '1-5' / смешанно '1-3 5'):")
+            volume_input = input("Том: ").strip()
+            volumes = parse_volumes(volume_input)
+            if volumes:
+                break
+            else:
+                print("Неверный ввод. Укажите положительные целые числа, диапазон вида '1-5' или их комбинацию.")
+
+        total = len(volumes)
+        for idx, ranobe_volume in enumerate(volumes, 1):
+            print(f"\n{'='*50}")
+            print(f"Скачивание тома {ranobe_volume} ({idx}/{total})")
+            print(f"{'='*50}")
+            downloader = RanobeDownloader(name, ranobe_volume)
+            downloader.fetch_ranobe_info()
+            downloader.create_folders()
+            downloader.fetch_cover_image()
+            downloader.download_cover_image()
+            downloader.create_book_object()
+            downloader.add_chapters_to_book_object()
+            downloader.save_book_to_file()
+
+        print(f"\nГотово! Скачано томов: {total}")
+
 
