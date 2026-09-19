@@ -1,3 +1,4 @@
+import re
 import requests
 import os
 from bs4 import BeautifulSoup
@@ -31,7 +32,7 @@ headers = {
     'Connection': 'keep-alive'
 }
 # Токен авторизации для ранобе доступных только авторизованным пользователям
-token = os.getenv("RANOBELIB_AUTH_TOKEN").strip()
+token = None
 if token:
     if not token.startswith("Bearer "):
         token = "Bearer " + token
@@ -209,14 +210,65 @@ def remove_bad_chars(text: str) -> str:
 
 
 
+# Matches a leading "Глава X" token (any case) + optional separator so it can be
+# stripped from chapter names like "ГЛАВА 1 Название" or "Глава 1. Название".
+# \S+ captures the chapter number/id (e.g. "1", "1.5", "1."); [.\s]* eats any
+# trailing period/space that was part of the separator.
+_CHAPTER_PREFIX_RE = re.compile(
+    r'^[Гг][Лл][Аа][Вв][Аа]\s+\S+[.\s]*',
+    re.UNICODE,
+)
+
+
+def make_chapter_title(chapter_num: str, chapter_name: str) -> str:
+    """Return a formatted chapter title without redundant repetition.
+
+    Strips any leading "Глава N" prefix from chapter_name (case-insensitive)
+    before composing the title, so names like "ГЛАВА 1 Прибыл коллега..."
+    become "Глава 1. Прибыл коллега..." instead of "Глава 1. ГЛАВА 1 Прибыл...".
+
+    Returns "Глава N" when chapter_name is empty or contained nothing beyond
+    the redundant prefix.
+    """
+    name = _CHAPTER_PREFIX_RE.sub('', chapter_name).strip()
+    if not name:
+        return f"Глава {chapter_num}"
+    return f"Глава {chapter_num}. {name}"
+
+
+def extract_text_from_prosemirror(node) -> str:
+    """Recursively extract plain text from a ProseMirror/TipTap JSON doc.
+
+    Accepts either a dict (the doc root or any node) or a plain string
+    (legacy API), so it is safe to call on any summary value.
+    """
+    if isinstance(node, str):
+        return node
+    if not isinstance(node, dict):
+        return ""
+    if node.get("type") == "text":
+        return node.get("text", "")
+    node_type = node.get("type", "")
+    parts = []
+    for child in node.get("content", []):
+        text = extract_text_from_prosemirror(child)
+        if text:
+            parts.append(text)
+    # doc / blockquote / lists: contain block children → join with newline
+    # paragraph / heading / listItem: contain inline children → join with ""
+    block_container = node_type in ("doc", "blockquote", "bulletList", "orderedList")
+    return "\n".join(parts) if block_container else "".join(parts)
+
+
 class ChapterContentParser:
-    def __init__(self, url: str, chapter_num: str, chapter_name: str, folder_name: str):
+    def __init__(self, url: str, chapter_num: str, chapter_name: str, folder_name: str, image_prefix: str = ""):
         self.url = url
         self.chapter_num = chapter_num
         self.chapter_name = chapter_name
         self.headers = headers
         self.images_dict = {}
         self.folder_name = folder_name
+        self.image_prefix = image_prefix  # prefix for image filenames to avoid cross-volume collisions
     def fetch_content(self) -> tuple[str, dict]:
         """Парсит и анализирует главу"""
         response = requests.get(self.url, headers=self.headers)
@@ -238,7 +290,7 @@ class ChapterContentParser:
             content = self._parse_modern_content(json_response['data'])
         
 
-        content = f"<h1>Глава {self.chapter_num}. {self.chapter_name}</h1>\n{content}"
+        content = f"<h1>{make_chapter_title(self.chapter_num, self.chapter_name)}</h1>\n{content}"
         return content, self.images_dict
 
     def _parse_legacy_content(self, content_html: str) -> str:
@@ -254,8 +306,9 @@ class ChapterContentParser:
             if img_url.count("ranobelib.me") > 1:
                 img_url = img_url[20:]
             print(f"Загрузка арта {self.chapter_num}-{image_counter}")
-            folder_img_path = f"{self.folder_name}images/{self.chapter_num}-{image_counter}.jpg"
-            epub_img_path = f"images/{self.chapter_num}-{image_counter}.jpg"
+            img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
+            folder_img_path = f"{self.folder_name}images/{img_key}.jpg"
+            epub_img_path = f"images/{img_key}.jpg"
 
             self._save_image(img_url, folder_img_path)
             self.images_dict[str(image_counter)] = folder_img_path
@@ -312,8 +365,9 @@ class ChapterContentParser:
         for image in element['attrs']['images']:
             img_url = attachments.get(image['image'])
             if img_url:
-                folder_img_path = f"{self.folder_name}images/{self.chapter_num}-{image_counter}.jpg"
-                epub_img_path = "images/{self.chapter_num}-{image_counter}.jpg"
+                img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
+                folder_img_path = f"{self.folder_name}images/{img_key}.jpg"
+                epub_img_path = f"images/{img_key}.jpg"
                 self._save_image(img_url, folder_img_path)
                 content += f'<p><img src="{epub_img_path}"></img></p>\n'
                 self.images_dict[str(image_counter)] = folder_img_path
@@ -489,7 +543,7 @@ class Book:
         self.images = []
         self.uuid = uuid.uuid4()
         self._page_id = map('{:04}'.format, itertools.count(1))
-        self._image_id = map('{:03}'.format, itertools.count(1))
+        self._image_id = itertools.count(1)
 
         self.path = pathlib.Path(self.tempdir.name).resolve()
         for dirname in [
@@ -517,8 +571,30 @@ class Book:
 
     def add_image(self, name, data):
         """Add image file."""
-        self.images.append(Image(next(self._image_id), name))
+        self.images.append(Image(f'{next(self._image_id):03}', name))
         self._add_file(pathlib.Path('images') / name, data)
+
+    def add_cover_page(self, title: str, cover_data: bytes):
+        """Add a full-page cover image as a regular content page.
+
+        Unlike set_cover(), this embeds the image in EPUB/images/ and produces
+        an ordinary page.xhtml that displays it full-screen. The page is added
+        to the root TOC and its Page object is returned so chapters can be
+        nested under it as children.
+        """
+        ext = self._detect_image_ext(cover_data)
+        img_id = f'{next(self._image_id):03}'
+        img_name = f'volcover_{img_id}.{ext}'
+        self.images.append(Image(img_id, img_name))
+        self._add_file(pathlib.Path('images') / img_name, cover_data)
+        content = (
+            f'<h1>{title}</h1>'
+            f'<div style="text-align:center;">'
+            f'<img src="images/{img_name}" '
+            f'style="max-width:100%; max-height:90vh;" alt="{title}"/>'
+            f'</div>'
+        )
+        return self.add_page(title=title, content=content)
 
     def add_font(self, name, data):
         """Add font file."""
@@ -579,6 +655,20 @@ class Book:
 
         with open(str(filepath), 'wb') as file:
             file.write(data)
+
+    def _detect_image_ext(self, data: bytes) -> str:
+        """Detect image file extension from magic bytes. Falls back to 'jpg'."""
+        magic_numbers = {
+            b'\xFF\xD8\xFF': 'jpg',
+            b'\x89PNG\r\n': 'png',
+            b'GIF87a': 'gif',
+            b'GIF89a': 'gif',
+            b'RIFF': 'webp',
+        }
+        for magic, ext in magic_numbers.items():
+            if data.startswith(magic):
+                return ext
+        return 'jpg'
 
     def _write(self, template, path, **data):
         with open(str(self.path / path), 'w', encoding="utf-8") as file:
