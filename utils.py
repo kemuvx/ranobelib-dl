@@ -1,3 +1,4 @@
+import hashlib
 import re
 import requests
 import os
@@ -260,8 +261,309 @@ def extract_text_from_prosemirror(node) -> str:
     return "\n".join(parts) if block_container else "".join(parts)
 
 
+def detect_image_ext(data: bytes) -> str:
+    """Detect image file extension from magic bytes. Falls back to 'jpg'."""
+    magic_numbers = {
+        b'\xFF\xD8\xFF': 'jpg',
+        b'\x89PNG\r\n': 'png',
+        b'GIF87a': 'gif',
+        b'GIF89a': 'gif',
+        b'RIFF': 'webp',
+    }
+    for magic, ext in magic_numbers.items():
+        if data.startswith(magic):
+            return ext
+    return 'jpg'
+
+
+class ImageManager:
+    """Manages downloading, deduplicating, and referencing images for an EPUB."""
+
+    def __init__(self, folder_name: str, book=None, headers: dict | None = None):
+        self.folder_name = folder_name
+        self.book = book
+        self.headers = headers or {}
+        self.url_to_hash: dict[str, str] = {}
+        self.hash_to_image: dict[str, dict] = {}
+        self.added_to_book: set[str] = set()
+
+    def process_image(
+        self,
+        img_url: str,
+        img_key: str,
+        chapter_num: str = "",
+        image_counter: int = 1,
+    ) -> tuple[str, str, bool]:
+        """Download or reuse an image based on URL and content hash.
+
+        Returns:
+            (epub_img_path, folder_img_path, is_duplicate)
+        """
+        # 1. URL cache hit
+        if img_url in self.url_to_hash:
+            img_hash = self.url_to_hash[img_url]
+            entry = self.hash_to_image[img_hash]
+            entry['ref_count'] += 1
+            print(f"  [Повторный арт] Гл. {chapter_num}: изображение уже скачано ({entry['canonical_name']}), повторно используем.")
+            return entry['epub_path'], entry['disk_path'], True
+
+        # 2. Download image
+        try:
+            response = requests.get(img_url, headers=self.headers)
+            response.raise_for_status()
+            img_bytes = response.content
+        except Exception as e:
+            print(f"  [Ошибка загрузки арта] Гл. {chapter_num}: {e}")
+            folder_img_path = f"{self.folder_name}images/{img_key}.jpg"
+            return f"images/{img_key}.jpg", folder_img_path, False
+
+        # 3. Content hash check
+        img_hash = hashlib.sha256(img_bytes).hexdigest()
+        self.url_to_hash[img_url] = img_hash
+
+        if img_hash in self.hash_to_image:
+            entry = self.hash_to_image[img_hash]
+            entry['ref_count'] += 1
+            print(f"  [Повторный арт] Гл. {chapter_num}: найден дубликат изображения ({entry['canonical_name']}), повторно используем.")
+            return entry['epub_path'], entry['disk_path'], True
+
+        # 4. New unique image
+        ext = detect_image_ext(img_bytes)
+        canonical_name = f"{img_key}.{ext}"
+        folder_img_path = f"{self.folder_name}images/{canonical_name}"
+        epub_img_path = f"images/{canonical_name}"
+
+        try:
+            with open(folder_img_path, 'wb') as f:
+                f.write(img_bytes)
+        except Exception as e:
+            print(f"  [Ошибка сохранения арта] {folder_img_path}: {e}")
+
+        if self.book:
+            self.book.add_image(canonical_name, img_bytes)
+            self.added_to_book.add(canonical_name)
+
+        self.hash_to_image[img_hash] = {
+            'canonical_name': canonical_name,
+            'disk_path': folder_img_path,
+            'epub_path': epub_img_path,
+            'ref_count': 1,
+        }
+        print(f"Загрузка арта {chapter_num}-{image_counter}")
+        return epub_img_path, folder_img_path, False
+
+
+class BadLinesFilter:
+    """Intelligent advertisement and translator plug cleaner with false-positive safeguards."""
+
+    _URL_RE = re.compile(
+        r"(?:https?://\S+|t\.me/\S+|vk\.com/\S+|vk\.me/\S+|boosty\.to/\S+|patreon\.com/\S+|discord(?:\.gg|app\.com)/\S+|donationalerts\.(?:ru|com)/\S+|yoomoney\.ru/\S+)",
+        re.IGNORECASE
+    )
+    _TG_HANDLE_RE = re.compile(r"(?<![\w@])@[A-Za-z0-9_]{3,}")
+
+    _CREDIT_KEYWORD_RE = re.compile(
+        r"(?:"
+        r"работал[аио]?\s+над\s+переводом|"
+        r"над\s+переводом\s+работал[аио]?|"
+        r"перевод(?:чик)?\s*:|"
+        r"редакт(?:ор|ура)\s*:|"
+        r"вычитка\s*:|"
+        r"тайп(?:ер)?\s*:|"
+        r"бета\s*:|"
+        r"клинер\s*:|"
+        r"анлейт\s*:|"
+        r"команда\s+перевода|"
+        r"переведено\s+командой|"
+        r"перевод\s+и\s+редактура|"
+        r"переведено\s+(?:специально\s+)?для\s+(?:сайта|проекта)?|"
+        r"сайт\s+перевода"
+        r")",
+        re.IGNORECASE
+    )
+
+    _CTA_KEYWORD_RE = re.compile(
+        r"(?:"
+        r"не\s*забудьте\s+(?:вступить|подписаться)|"
+        r"вступайте\s+в|"
+        r"подписывайтесь\s+на|"
+        r"присоединяйтесь\s+к|"
+        r"ж[дд]ем\s+(?:вас\s+)?в\s+(?:нашем|нашей)?"
+        r")",
+        re.IGNORECASE
+    )
+
+    _SOCIAL_REF_RE = re.compile(
+        r"(?:"
+        r"наш\s+(?:тг|телеграм|telegram|канал|паблик|дискорд|discord|вк|vk)|"
+        r"групп[аеуы]\s+(?:вк|вконтакте)|"
+        r"паблик[еауы]?\s+(?:вк|вконтакте)|"
+        r"телеграм-канал[еауы]?|"
+        r"тг-канал[еауы]?"
+        r")",
+        re.IGNORECASE
+    )
+
+    _DONATION_KEYWORD_RE = re.compile(
+        r"(?:"
+        r"поддержать\s+(?:перевод|переводчик[а-я]*|команду|выход\s+глав)|"
+        r"платные\s+главы|"
+        r"ранний\s+доступ\s+(?:к\s+главам)?|"
+        r"главы\s+на\s+бусти|"
+        r"донат\s*:|"
+        r"номер\s+карты\s*:?|"
+        r"сбер(?:банк)?\s*:?|"
+        r"тинькофф\s*:?|"
+        r"юмани\s*:?|"
+        r"yoomoney|"
+        r"boosty\.to|"
+        r"patreon\.com|"
+        r"donationalerts"
+        r")",
+        re.IGNORECASE
+    )
+
+    _STRICT_CREDIT_LINE_RE = re.compile(
+        r"^\s*(?:(?:Над\s+переводом\s+работал[аио]?|Перевод(?:чик)?|Редакт(?:ор|ура)|Вычитка|Бета|Тайп(?:ер)?|Клинер|Анлейт|Сверил)\s*:\s*[\w\d_\s.,&/@:()-]{2,80})$",
+        re.IGNORECASE
+    )
+
+    _STANDALONE_LINK_RE = re.compile(
+        r"^\s*(?:https?://\S+|t\.me/\S+|vk\.com/\S+|boosty\.to/\S+|discord\.gg/\S+|@[A-Za-z0-9_]{3,})\s*$",
+        re.IGNORECASE
+    )
+
+    _SITE_WATERMARK_RE = re.compile(
+        r"^\s*(?:"
+        r"(?:источник|взято\s+с|читать\s+на)\s*:\s*(?:https?://)?(?:ranobelib|rulate|ранобелиб|ranobehub)\S*|"
+        r"переведено\s+(?:специально\s+)?для\s+(?:ranobelib|rulate|ранобелиб|ranobehub)\S*|"
+        r"(?:ranobelib\.me|rulate\.ru|ranobehub\.org|tl\.rulate\.ru)"
+        r")\s*$",
+        re.IGNORECASE
+    )
+
+    _DIALOGUE_START_RE = re.compile(r"^\s*(?:[—–-]\s|«|“|\")")
+
+    def is_ad_line(self, line: str) -> tuple[bool, str]:
+        text = line.strip()
+        if not text:
+            return False, ""
+
+        if len(text) > 400 and not self._URL_RE.search(text):
+            return False, ""
+
+        is_dialogue = bool(self._DIALOGUE_START_RE.match(text))
+        has_explicit_url = bool(self._URL_RE.search(text))
+        has_tg_handle = bool(self._TG_HANDLE_RE.search(text))
+        has_social_ref = bool(self._SOCIAL_REF_RE.search(text))
+        has_credit_kw = bool(self._CREDIT_KEYWORD_RE.search(text))
+        has_cta_kw = bool(self._CTA_KEYWORD_RE.search(text))
+        has_donation_kw = bool(self._DONATION_KEYWORD_RE.search(text))
+
+        # Dialogue guard: Dialogue is protected unless it contains an explicit URL or clear social handle/ref
+        if is_dialogue and not has_explicit_url and not (has_tg_handle and has_social_ref):
+            return False, ""
+
+        if self._SITE_WATERMARK_RE.match(text):
+            return True, "Водяной знак сайта"
+        if self._STANDALONE_LINK_RE.match(text):
+            return True, "Ссылка или никнейм"
+        if self._STRICT_CREDIT_LINE_RE.match(text):
+            if ":" in text or "@" in text or "работа" in text.lower():
+                return True, "Титры команды перевода"
+
+        if has_donation_kw and (has_explicit_url or has_tg_handle or "донат" in text.lower() or "номер карты" in text.lower() or "бусти" in text.lower()):
+            return True, "Донат / платные главы"
+        if has_credit_kw and (has_explicit_url or has_tg_handle or has_social_ref):
+            return True, "Титры с контактами"
+        if has_cta_kw and (has_explicit_url or has_tg_handle or has_social_ref):
+            return True, "Призыв подписаться в соцсети"
+        if has_social_ref and (has_tg_handle or has_explicit_url):
+            return True, "Контакты команды"
+
+        return False, ""
+
+    def filter_chapter_html(self, html_content: str, chapter_num: str = "") -> str:
+        """Filter out ad lines and translator plugs from chapter HTML."""
+        if not html_content:
+            return html_content
+
+        soup = BeautifulSoup(html_content, 'lxml')
+        body = soup.body if soup.body else soup
+
+        for tag in list(body.find_all(['p', 'div', 'blockquote', 'li', 'h2', 'h3', 'h4', 'h5', 'h6'])):
+            if not tag.parent:
+                continue
+
+            has_images = bool(tag.find_all('img'))
+            br_tags = tag.find_all('br')
+
+            if not br_tags and not has_images:
+                text = tag.get_text(strip=True)
+                is_ad, reason = self.is_ad_line(text)
+                if is_ad:
+                    print(f"  [УДАЛЕНА РЕКЛАМА | Гл. {chapter_num}]: \"{text}\"  (Причина: {reason})")
+                    tag.decompose()
+                    continue
+
+            if br_tags:
+                segments = []
+                curr_nodes = []
+                for child in list(tag.children):
+                    if getattr(child, 'name', None) == 'br':
+                        segments.append((curr_nodes, child))
+                        curr_nodes = []
+                    else:
+                        curr_nodes.append(child)
+                segments.append((curr_nodes, None))
+
+                for seg_nodes, br_node in segments:
+                    seg_has_img = any(
+                        getattr(n, 'name', None) == 'img' or
+                        (hasattr(n, 'find_all') and bool(n.find_all('img')))
+                        for n in seg_nodes
+                    )
+                    if seg_has_img:
+                        continue
+                    seg_text = "".join(
+                        n.get_text() if hasattr(n, 'get_text') else str(n)
+                        for n in seg_nodes
+                    ).strip()
+                    if not seg_text:
+                        continue
+                    is_ad, reason = self.is_ad_line(seg_text)
+                    if is_ad:
+                        print(f"  [УДАЛЕНА РЕКЛАМА | Гл. {chapter_num}]: \"{seg_text}\"  (Причина: {reason})")
+                        for n in seg_nodes:
+                            n.extract()
+                        if br_node:
+                            br_node.extract()
+
+                while tag.contents and getattr(tag.contents[-1], 'name', None) == 'br':
+                    tag.contents[-1].extract()
+                while tag.contents and getattr(tag.contents[0], 'name', None) == 'br':
+                    tag.contents[0].extract()
+
+                if not tag.get_text(strip=True) and not tag.find_all('img'):
+                    tag.decompose()
+
+        return "".join(
+            str(c) for c in body.children
+            if getattr(c, 'name', None) or str(c).strip()
+        )
+
+
 class ChapterContentParser:
-    def __init__(self, url: str, chapter_num: str, chapter_name: str, folder_name: str, image_prefix: str = ""):
+    def __init__(
+        self,
+        url: str,
+        chapter_num: str,
+        chapter_name: str,
+        folder_name: str,
+        image_prefix: str = "",
+        image_manager: ImageManager | None = None,
+        filter_ads: bool = False,
+    ):
         self.url = url
         self.chapter_num = chapter_num
         self.chapter_name = chapter_name
@@ -269,26 +571,30 @@ class ChapterContentParser:
         self.images_dict = {}
         self.folder_name = folder_name
         self.image_prefix = image_prefix  # prefix for image filenames to avoid cross-volume collisions
+        self.image_manager = image_manager or ImageManager(folder_name=folder_name, book=None, headers=headers)
+        self.filter_ads = filter_ads
+        self.ad_filter = BadLinesFilter() if filter_ads else None
+
     def fetch_content(self) -> tuple[str, dict]:
         """Парсит и анализирует главу"""
         response = requests.get(self.url, headers=self.headers)
         response.raise_for_status()
         json_response = response.json()
 
-
-        try: # Проверка легаси глава или нет
+        try:  # Проверка легаси глава или нет
             json_response['data']['content']['type']  # если выдает ошибку значит легаси
             is_legacy = False
         except TypeError:
             is_legacy = True
         print(f"\nГлава {self.chapter_num}: {self.chapter_name}")
-        
 
         if is_legacy:
             content = self._parse_legacy_content(json_response['data']['content'])
         else:
             content = self._parse_modern_content(json_response['data'])
-        
+
+        if self.filter_ads and self.ad_filter:
+            content = self.ad_filter.filter_chapter_html(content, str(self.chapter_num))
 
         content = f"<h1>{make_chapter_title(self.chapter_num, self.chapter_name)}</h1>\n{content}"
         return content, self.images_dict
@@ -300,22 +606,26 @@ class ChapterContentParser:
         bad_sites = ["novel.tl", "ruranobe.ru", "rulate.ru"]
 
         for img in content_soup.find_all('img'):
-            img_url = img['src']
+            img_url = img.get('src', '')
+            if not img_url:
+                continue
             if not any(x in img_url for x in bad_sites):
                 img_url = "https://ranobelib.me" + img_url
             if img_url.count("ranobelib.me") > 1:
                 img_url = img_url[20:]
-            print(f"Загрузка арта {self.chapter_num}-{image_counter}")
-            img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
-            folder_img_path = f"{self.folder_name}images/{img_key}.jpg"
-            epub_img_path = f"images/{img_key}.jpg"
 
-            self._save_image(img_url, folder_img_path)
-            self.images_dict[str(image_counter)] = folder_img_path
+            img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
+            epub_img_path, folder_img_path, is_dup = self.image_manager.process_image(
+                img_url=img_url,
+                img_key=img_key,
+                chapter_num=str(self.chapter_num),
+                image_counter=image_counter,
+            )
+            if not is_dup:
+                self.images_dict[str(image_counter)] = folder_img_path
             img['src'] = epub_img_path
             image_counter += 1
 
-        
         content = str(content_soup).replace('<html>', "").replace("</html>", "").replace("<body>", "").replace("</body>", "")
         return content
 
@@ -324,7 +634,7 @@ class ChapterContentParser:
         content = ""
         image_counter = 1
         attachments = {att['name']: f"https://ranobelib.me{att['url']}" for att in data.get('attachments', [])}
-        
+
         for element in data['content']['content']:
             content = self._parse_element(element, attachments, image_counter, content)
             if isinstance(content, tuple):
@@ -334,7 +644,7 @@ class ChapterContentParser:
     def _parse_element(self, element: dict, attachments: dict = None, image_counter: int = 1, current_content: str = "") -> str | tuple:
         """Рекурсивно парсит любой элемент"""
         element_type = element['type']
-        
+
         if element_type == 'image':
             return self._process_images(element, attachments, image_counter, current_content)
         elif element_type == "paragraph":
@@ -366,12 +676,15 @@ class ChapterContentParser:
             img_url = attachments.get(image['image'])
             if img_url:
                 img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
-                folder_img_path = f"{self.folder_name}images/{img_key}.jpg"
-                epub_img_path = f"images/{img_key}.jpg"
-                self._save_image(img_url, folder_img_path)
+                epub_img_path, folder_img_path, is_dup = self.image_manager.process_image(
+                    img_url=img_url,
+                    img_key=img_key,
+                    chapter_num=str(self.chapter_num),
+                    image_counter=image_counter,
+                )
                 content += f'<p><img src="{epub_img_path}"></img></p>\n'
-                self.images_dict[str(image_counter)] = folder_img_path
-                print(f"Загрузка арта {self.chapter_num}-{image_counter}")
+                if not is_dup:
+                    self.images_dict[str(image_counter)] = folder_img_path
                 image_counter += 1
         return content, image_counter
 
@@ -552,6 +865,7 @@ class Book:
 
         self.set_stylesheet('')
         self._cover = None
+        self._cover_hashes = {}
 
     ###########################################################################
     # Public Methods
@@ -570,9 +884,15 @@ class Book:
         return page
 
     def add_image(self, name, data):
-        """Add image file."""
-        self.images.append(Image(f'{next(self._image_id):03}', name))
+        """Add image file, reusing existing manifest entry if name was already added."""
+        for img in self.images:
+            if img.name == name:
+                return img
+        img_id = f'{next(self._image_id):03}'
+        img_entry = Image(img_id, name)
+        self.images.append(img_entry)
         self._add_file(pathlib.Path('images') / name, data)
+        return img_entry
 
     def add_cover_page(self, title: str, cover_data: bytes):
         """Add a full-page cover image as a regular content page.
@@ -580,13 +900,20 @@ class Book:
         Unlike set_cover(), this embeds the image in EPUB/images/ and produces
         an ordinary page.xhtml that displays it full-screen. The page is added
         to the root TOC and its Page object is returned so chapters can be
-        nested under it as children.
+        nested under it as children. Reuses existing image if identical cover_data
+        was already added.
         """
-        ext = self._detect_image_ext(cover_data)
-        img_id = f'{next(self._image_id):03}'
-        img_name = f'volcover_{img_id}.{ext}'
-        self.images.append(Image(img_id, img_name))
-        self._add_file(pathlib.Path('images') / img_name, cover_data)
+        cover_hash = hashlib.sha256(cover_data).hexdigest()
+        if cover_hash in self._cover_hashes:
+            img_name = self._cover_hashes[cover_hash]
+        else:
+            ext = self._detect_image_ext(cover_data)
+            img_id = f'{next(self._image_id):03}'
+            img_name = f'volcover_{img_id}.{ext}'
+            self._cover_hashes[cover_hash] = img_name
+            self.images.append(Image(img_id, img_name))
+            self._add_file(pathlib.Path('images') / img_name, cover_data)
+
         content = (
             f'<h1>{title}</h1>'
             f'<div style="text-align:center;">'
