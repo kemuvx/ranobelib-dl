@@ -2,20 +2,22 @@ import os
 import time
 import shutil
 import requests
-from utils import remove_bad_chars, get_ranobe_name_from_url, headers, style, Book, ChapterContentParser, make_chapter_title, extract_text_from_prosemirror
+from utils import remove_bad_chars, get_ranobe_name_from_url, headers, style, Book, ChapterContentParser, make_chapter_title, extract_text_from_prosemirror, ImageManager, BadLinesFilter
 TIME_TO_SLEEP = 0.5  # задержка между запросами к каждой главе
 
 ADD_FOLDER = True  # Добавлять ли папку с названием ранобе
+FILTER_ADS = True  # Удалять ли рекламу, ссылки на соцсети и водяные знаки переводчиков
 
 class RanobeDownloader:
     base_url = "https://api.cdnlibs.org"
 
-    def __init__(self, name, volume=None):
+    def __init__(self, name, volume=None, filter_ads=FILTER_ADS):
         self.data = None  
         self.name = name
         self.volume = volume          # None → whole-book mode
         self.volumes = []             # populated in fetch_ranobe_info
         self.info_dict = None
+        self.filter_ads = filter_ads
         
         
         self.chosen_branch_id = 0
@@ -254,6 +256,11 @@ class RanobeDownloader:
         with open(f'{self.folder_name}cover/cover.jpg', 'rb') as file:
             self.book.set_cover(file.read())
         self.book.set_stylesheet(style)
+        self.image_manager = ImageManager(
+            folder_name=self.folder_name,
+            book=self.book,
+            headers=headers
+        )
 
     def add_chapters_to_book_object(self):
         if self.volume is None:
@@ -312,6 +319,8 @@ class RanobeDownloader:
                 chapter_name=chapter_name,
                 folder_name=self.folder_name,
                 image_prefix=image_prefix,
+                image_manager=self.image_manager,
+                filter_ads=self.filter_ads,
             )
             chapter_content, images_dict = parser.fetch_content()
             self.book.add_page(
@@ -391,6 +400,7 @@ if __name__ == "__main__":
             continue
         break
 
+    print(f"\nФильтр рекламы: {'Включен' if FILTER_ADS else 'Отключен'}")
     print("\nРежим загрузки:")
     print("  1. Один или несколько томов (отдельные файлы)")
     print("  2. Вся книга целиком (один файл, вложенное оглавление)")
