@@ -1,6 +1,6 @@
 *epub
 .env
-
+.nomedia
 */
 !templates/
 !tests/
