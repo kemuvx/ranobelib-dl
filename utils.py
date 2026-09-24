@@ -1,7 +1,10 @@
 import hashlib
+import json
 import re
 import requests
 import os
+import shutil
+import subprocess
 from bs4 import BeautifulSoup
 import collections
 import datetime
@@ -276,16 +279,99 @@ def detect_image_ext(data: bytes) -> str:
     return 'jpg'
 
 
-class ImageManager:
-    """Manages downloading, deduplicating, and referencing images for an EPUB."""
+DEFAULT_BANNER_CACHE_FILE = ".ad_banners_cache.json"
 
-    def __init__(self, folder_name: str, book=None, headers: dict | None = None):
+
+def load_ad_banners_cache(cache_path: str = DEFAULT_BANNER_CACHE_FILE) -> set[str]:
+    """Load persistent set of confirmed ad banner SHA-256 hashes."""
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+                elif isinstance(data, dict):
+                    return set(data.get("banners", []))
+        except Exception as e:
+            print(f"Не удалось загрузить кэш баннеров из {cache_path}: {e}")
+    return set()
+
+
+def save_ad_banners_cache(hashes: set[str], cache_path: str = DEFAULT_BANNER_CACHE_FILE):
+    """Save persistent set of confirmed ad banner SHA-256 hashes."""
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(hashes)), f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Не удалось сохранить кэш баннеров в {cache_path}: {e}")
+
+
+def display_terminal_image(image_path: str, max_cols: int = 80, max_rows: int = 25) -> bool:
+    """Display an image directly in the terminal using Sixel or Unicode symbols.
+
+    Returns True if successfully displayed, False otherwise.
+    """
+    if not os.path.exists(image_path):
+        return False
+
+    term_size = shutil.get_terminal_size((80, 24))
+    cols = min(term_size.columns, max_cols)
+    rows = min(max(10, term_size.lines - 5), max_rows)
+
+    # 1. Try chafa with Sixel format (optimal quality and automatic sizing)
+    if shutil.which("chafa"):
+        try:
+            res = subprocess.run(
+                ["chafa", "-f", "sixels", "-s", f"{cols}x{rows}", image_path],
+                check=False
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    # 2. Try img2sixel
+    if shutil.which("img2sixel"):
+        try:
+            res = subprocess.run(
+                ["img2sixel", "-w", f"{cols * 8}px", image_path],
+                check=False
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    # 3. Fallback to chafa symbols (Unicode 24-bit half-blocks, universal terminal support)
+    if shutil.which("chafa"):
+        try:
+            res = subprocess.run(
+                ["chafa", "-f", "symbols", "-s", f"{cols}x{rows}", image_path],
+                check=False
+            )
+            if res.returncode == 0:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+class ImageManager:
+    """Manages downloading, deduplicating, referencing, and tracking banner images."""
+
+    def __init__(self, folder_name: str, book=None, headers: dict | None = None, banner_cache_path: str = DEFAULT_BANNER_CACHE_FILE):
         self.folder_name = folder_name
         self.book = book
         self.headers = headers or {}
         self.url_to_hash: dict[str, str] = {}
         self.hash_to_image: dict[str, dict] = {}
         self.added_to_book: set[str] = set()
+        self.banner_cache_path = banner_cache_path
+        self.known_banners = load_ad_banners_cache(banner_cache_path)
+        self.whitelisted_hashes: set[str] = set()
+        # hash -> list of occurrences
+        self.image_occurrences: dict[str, list[dict]] = collections.defaultdict(list)
 
     def process_image(
         self,
@@ -293,6 +379,8 @@ class ImageManager:
         img_key: str,
         chapter_num: str = "",
         image_counter: int = 1,
+        is_near_end: bool = False,
+        is_near_start: bool = False,
     ) -> tuple[str, str, bool]:
         """Download or reuse an image based on URL and content hash.
 
@@ -304,6 +392,11 @@ class ImageManager:
             img_hash = self.url_to_hash[img_url]
             entry = self.hash_to_image[img_hash]
             entry['ref_count'] += 1
+            self.image_occurrences[img_hash].append({
+                'chapter_num': str(chapter_num),
+                'is_near_end': is_near_end,
+                'is_near_start': is_near_start,
+            })
             print(f"  [Повторный арт] Гл. {chapter_num}: изображение уже скачано ({entry['canonical_name']}), повторно используем.")
             return entry['epub_path'], entry['disk_path'], True
 
@@ -320,6 +413,11 @@ class ImageManager:
         # 3. Content hash check
         img_hash = hashlib.sha256(img_bytes).hexdigest()
         self.url_to_hash[img_url] = img_hash
+        self.image_occurrences[img_hash].append({
+            'chapter_num': str(chapter_num),
+            'is_near_end': is_near_end,
+            'is_near_start': is_near_start,
+        })
 
         if img_hash in self.hash_to_image:
             entry = self.hash_to_image[img_hash]
@@ -348,9 +446,125 @@ class ImageManager:
             'disk_path': folder_img_path,
             'epub_path': epub_img_path,
             'ref_count': 1,
+            'hash': img_hash,
         }
         print(f"Загрузка арта {chapter_num}-{image_counter}")
         return epub_img_path, folder_img_path, False
+
+    def find_suspicious_banners(self, min_repeats: int = 2) -> list[dict]:
+        """Find images that appear in multiple chapters at the end or start."""
+        suspicious = []
+        for img_hash, entry in self.hash_to_image.items():
+            if img_hash in self.whitelisted_hashes:
+                continue
+
+            occurrences = self.image_occurrences.get(img_hash, [])
+            distinct_chapters = set(occ['chapter_num'] for occ in occurrences)
+            total_chapters = len(distinct_chapters)
+
+            end_or_start_occs = [occ for occ in occurrences if occ['is_near_end'] or occ['is_near_start']]
+            end_or_start_chapters = len(set(occ['chapter_num'] for occ in end_or_start_occs))
+
+            is_known = img_hash in self.known_banners
+
+            if is_known or (total_chapters >= min_repeats and end_or_start_chapters >= 2):
+                def _sort_key(ch):
+                    try:
+                        return float(ch)
+                    except ValueError:
+                        return 9999.0
+
+                suspicious.append({
+                    'hash': img_hash,
+                    'canonical_name': entry['canonical_name'],
+                    'disk_path': entry['disk_path'],
+                    'epub_path': entry['epub_path'],
+                    'total_chapters': total_chapters,
+                    'end_or_start_chapters': end_or_start_chapters,
+                    'chapter_nums': sorted(list(distinct_chapters), key=_sort_key),
+                    'is_known': is_known,
+                })
+        return suspicious
+
+
+def review_ad_banners(image_manager: ImageManager, book, min_repeats: int = 2):
+    """Review suspicious recurring banner images and purge confirmed ones."""
+    if not image_manager or not book:
+        return
+
+    suspicious = image_manager.find_suspicious_banners(min_repeats=min_repeats)
+    if not suspicious:
+        return
+
+    print("\n" + "=" * 65)
+    print("  ПРОВЕРКА РЕКЛАМНЫХ БАННЕРОВ В КОНЦЕ/НАЧАЛЕ ГЛАВ")
+    print("=" * 65)
+
+    for item in suspicious:
+        canonical_name = item['canonical_name']
+        img_hash = item['hash']
+        disk_path = item['disk_path']
+        ch_list = item['chapter_nums']
+        total_ch = item['total_chapters']
+        end_start_ch = item['end_or_start_chapters']
+        is_known = item['is_known']
+
+        if is_known:
+            print(f"\n[!] Известный рекламный баннер из кэша: '{canonical_name}' (хэш {img_hash[:8]})")
+            print(f"    Встретился в {total_ch} глав(ах): {', '.join(ch_list[:15])}{'...' if len(ch_list) > 15 else ''}")
+            purged = book.purge_image(canonical_name)
+            local_file = os.path.join(image_manager.folder_name, "images", canonical_name)
+            if os.path.exists(local_file):
+                try:
+                    os.remove(local_file)
+                except Exception:
+                    pass
+            print(f"    [УДАЛЕН БАННЕР] Автоматически удален из {purged} глав(ы).")
+            continue
+
+        print(f"\n[?] Подозрительное изображение: '{canonical_name}'")
+        print(f"    Встретилось в {total_ch} глав(ах), из них {end_start_ch} раз(а) на границе глав:")
+        print(f"    Главы: {', '.join(ch_list[:20])}{'...' if len(ch_list) > 20 else ''}")
+        print(f"    Файл: {disk_path}")
+
+        print("\nПредпросмотр изображения:")
+        displayed = display_terminal_image(disk_path)
+        if not displayed:
+            print("  (Терминал не поддерживает sixel/chafa, откройте файл вручную)")
+
+        while True:
+            print("\nЧто сделать с этим изображением?")
+            print("  1. Удалить из ВСЕХ глав (рекламный баннер) [По умолчанию: Enter / 1]")
+            print("  2. Оставить во всех главах (сюжетная иллюстрация / арт)")
+            print("  3. Открыть во внешнем просмотрщике (xdg-open)")
+            choice = input("Выберите действие (1/2/3, по умолчанию 1): ").strip()
+
+            if choice in ("", "1"):
+                purged = book.purge_image(canonical_name)
+                image_manager.known_banners.add(img_hash)
+                save_ad_banners_cache(image_manager.known_banners, image_manager.banner_cache_path)
+                local_file = os.path.join(image_manager.folder_name, "images", canonical_name)
+                if os.path.exists(local_file):
+                    try:
+                        os.remove(local_file)
+                    except Exception:
+                        pass
+                print(f"  [УДАЛЕН БАННЕР] '{canonical_name}' удален из {purged} глав(ы) и добавлен в кэш баннеров.")
+                break
+            elif choice == "2":
+                image_manager.whitelisted_hashes.add(img_hash)
+                print(f"  [ОСТАВЛЕНО] '{canonical_name}' сохранено в книге.")
+                break
+            elif choice == "3":
+                if shutil.which("xdg-open"):
+                    subprocess.Popen(["xdg-open", disk_path])
+                    print("  Открыто в просмотрщике системы.")
+                else:
+                    print(f"  xdg-open не найден. Путь к файлу: {disk_path}")
+            else:
+                print("  Неверный ввод. Введите 1, 2 или 3.")
+
+    print("=" * 65 + "\n")
 
 
 class BadLinesFilter:
@@ -614,12 +828,23 @@ class ChapterContentParser:
             if img_url.count("ranobelib.me") > 1:
                 img_url = img_url[20:]
 
+            # Position check for banner detection
+            trailing_strings = img.find_all_next(string=True)
+            trailing_len = sum(len(s.strip()) for s in trailing_strings)
+            is_near_end = trailing_len < 250
+
+            leading_strings = img.find_all_previous(string=True)
+            leading_len = sum(len(s.strip()) for s in leading_strings)
+            is_near_start = leading_len < 50
+
             img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
             epub_img_path, folder_img_path, is_dup = self.image_manager.process_image(
                 img_url=img_url,
                 img_key=img_key,
                 chapter_num=str(self.chapter_num),
                 image_counter=image_counter,
+                is_near_end=is_near_end,
+                is_near_start=is_near_start,
             )
             if not is_dup:
                 self.images_dict[str(image_counter)] = folder_img_path
@@ -634,19 +859,46 @@ class ChapterContentParser:
         content = ""
         image_counter = 1
         attachments = {att['name']: f"https://ranobelib.me{att['url']}" for att in data.get('attachments', [])}
+        elements = data.get('content', {}).get('content', [])
+        total_elements = len(elements)
 
-        for element in data['content']['content']:
-            content = self._parse_element(element, attachments, image_counter, content)
+        for idx, element in enumerate(elements):
+            content = self._parse_element(
+                element=element,
+                attachments=attachments,
+                image_counter=image_counter,
+                current_content=content,
+                element_idx=idx,
+                total_elements=total_elements,
+                all_elements=elements,
+            )
             if isinstance(content, tuple):
                 content, image_counter = content
         return content
 
-    def _parse_element(self, element: dict, attachments: dict = None, image_counter: int = 1, current_content: str = "") -> str | tuple:
+    def _parse_element(
+        self,
+        element: dict,
+        attachments: dict = None,
+        image_counter: int = 1,
+        current_content: str = "",
+        element_idx: int | None = None,
+        total_elements: int | None = None,
+        all_elements: list | None = None,
+    ) -> str | tuple:
         """Рекурсивно парсит любой элемент"""
         element_type = element['type']
 
         if element_type == 'image':
-            return self._process_images(element, attachments, image_counter, current_content)
+            return self._process_images(
+                element=element,
+                attachments=attachments,
+                image_counter=image_counter,
+                content=current_content,
+                element_idx=element_idx,
+                total_elements=total_elements,
+                all_elements=all_elements,
+            )
         elif element_type == "paragraph":
             return current_content + self._process_paragraph(element)
         elif element_type == "heading":
@@ -671,7 +923,29 @@ class ChapterContentParser:
         with open(img_path, 'wb') as f:
             f.write(img_content)
 
-    def _process_images(self, element, attachments, image_counter, content):
+    def _process_images(
+        self,
+        element,
+        attachments,
+        image_counter,
+        content,
+        element_idx: int | None = None,
+        total_elements: int | None = None,
+        all_elements: list | None = None,
+    ):
+        is_near_end = False
+        is_near_start = False
+        if element_idx is not None and total_elements is not None and all_elements is not None:
+            trailing_text = ""
+            for trail_el in all_elements[element_idx + 1:]:
+                trailing_text += extract_text_from_prosemirror(trail_el)
+            is_near_end = (element_idx >= total_elements - 3) or (len(trailing_text.strip()) < 250)
+
+            leading_text = ""
+            for lead_el in all_elements[:element_idx]:
+                leading_text += extract_text_from_prosemirror(lead_el)
+            is_near_start = (element_idx <= 1) and (len(leading_text.strip()) < 50)
+
         for image in element['attrs']['images']:
             img_url = attachments.get(image['image'])
             if img_url:
@@ -681,6 +955,8 @@ class ChapterContentParser:
                     img_key=img_key,
                     chapter_num=str(self.chapter_num),
                     image_counter=image_counter,
+                    is_near_end=is_near_end,
+                    is_near_start=is_near_start,
                 )
                 content += f'<p><img src="{epub_img_path}"></img></p>\n'
                 if not is_dup:
@@ -922,6 +1198,56 @@ class Book:
             f'</div>'
         )
         return self.add_page(title=title, content=content)
+
+    def purge_image(self, canonical_name: str) -> int:
+        """Purge an image completely from all pages and manifest of the book.
+
+        Returns the number of pages from which the image was removed.
+        """
+        cleaned_pages_count = 0
+        epub_dir = self.path / 'EPUB'
+        img_srcs = {f'images/{canonical_name}', canonical_name}
+
+        for page_file in epub_dir.glob('page*.xhtml'):
+            try:
+                with open(page_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                if not any(src in content for src in img_srcs):
+                    continue
+
+                soup = BeautifulSoup(content, 'lxml')
+                modified = False
+                for img in soup.find_all('img'):
+                    if img.get('src') in img_srcs:
+                        parent = img.parent
+                        img.decompose()
+                        modified = True
+                        if parent and parent.name == 'p':
+                            if not parent.get_text(strip=True) and not parent.find_all('img'):
+                                parent.decompose()
+
+                if modified:
+                    cleaned_html = "".join(str(c) for c in (soup.body.children if soup.body else soup.children))
+                    title_tag = soup.find('title')
+                    title = title_tag.get_text() if title_tag else ""
+                    self._write('page.xhtml', f'EPUB/{page_file.name}', title=title, body=cleaned_html)
+                    cleaned_pages_count += 1
+            except Exception as e:
+                print(f"Ошибка при очистке изображения из {page_file.name}: {e}")
+
+        # Remove from self.images manifest list
+        self.images = [img for img in self.images if img.name != canonical_name]
+
+        # Delete physical image file from EPUB/images/
+        img_file = epub_dir / 'images' / canonical_name
+        if img_file.exists():
+            try:
+                img_file.unlink()
+            except Exception as e:
+                print(f"Ошибка удаления файла изображения {img_file}: {e}")
+
+        return cleaned_pages_count
 
     def add_font(self, name, data):
         """Add font file."""
