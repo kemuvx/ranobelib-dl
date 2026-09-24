@@ -4,3 +4,4 @@
 */
 !templates/
 !tests/
+.ad_banners_cache.json

@@ -2,22 +2,29 @@ import os
 import time
 import shutil
 import requests
-from utils import remove_bad_chars, get_ranobe_name_from_url, headers, style, Book, ChapterContentParser, make_chapter_title, extract_text_from_prosemirror, ImageManager, BadLinesFilter
+from utils import (
+    remove_bad_chars, get_ranobe_name_from_url, headers, style, Book,
+    ChapterContentParser, make_chapter_title, extract_text_from_prosemirror,
+    ImageManager, BadLinesFilter, review_ad_banners
+)
 TIME_TO_SLEEP = 0.5  # задержка между запросами к каждой главе
 
 ADD_FOLDER = True  # Добавлять ли папку с названием ранобе
 FILTER_ADS = True  # Удалять ли рекламу, ссылки на соцсети и водяные знаки переводчиков
+CHECK_AD_BANNERS = True  # Проверять подозрительные рекламные баннеры (повторяющиеся в конце глав)
+BANNER_MIN_REPEATS = 2  # Минимальное количество повторений баннера для проверки
 
 class RanobeDownloader:
     base_url = "https://api.cdnlibs.org"
 
-    def __init__(self, name, volume=None, filter_ads=FILTER_ADS):
+    def __init__(self, name, volume=None, filter_ads=FILTER_ADS, check_ad_banners=CHECK_AD_BANNERS):
         self.data = None  
         self.name = name
         self.volume = volume          # None → whole-book mode
         self.volumes = []             # populated in fetch_ranobe_info
         self.info_dict = None
         self.filter_ads = filter_ads
+        self.check_ad_banners = check_ad_banners
         
         
         self.chosen_branch_id = 0
@@ -335,7 +342,14 @@ class RanobeDownloader:
             time.sleep(TIME_TO_SLEEP)  # Чтобы не получить error 429
 
 
+    def review_ad_banners(self):
+        if not self.check_ad_banners or not hasattr(self, 'image_manager') or not self.image_manager:
+            return
+        review_ad_banners(self.image_manager, self.book, min_repeats=BANNER_MIN_REPEATS)
+
     def save_book_to_file(self):
+        if self.check_ad_banners:
+            self.review_ad_banners()
         if self.volume is None:
             book_name = remove_bad_chars(self.info_dict["title"]) + " (полная версия).epub"
         else:
@@ -401,6 +415,7 @@ if __name__ == "__main__":
         break
 
     print(f"\nФильтр рекламы: {'Включен' if FILTER_ADS else 'Отключен'}")
+    print(f"Проверка рекламных баннеров: {'Включена' if CHECK_AD_BANNERS else 'Отключена'}")
     print("\nРежим загрузки:")
     print("  1. Один или несколько томов (отдельные файлы)")
     print("  2. Вся книга целиком (один файл, вложенное оглавление)")
