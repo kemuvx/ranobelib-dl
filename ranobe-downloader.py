@@ -5,17 +5,17 @@ import requests
 from utils import (
     remove_bad_chars, get_ranobe_name_from_url, headers, style, Book,
     ChapterContentParser, make_chapter_title, extract_text_from_prosemirror,
-    ImageManager, BadLinesFilter, review_ad_banners
+    ImageManager, BadLinesFilter, review_ad_banners, CONFIG
 )
-TIME_TO_SLEEP = 0.5  # задержка между запросами к каждой главе
+TIME_TO_SLEEP = CONFIG.get("time_to_sleep", 0.5)  # задержка между запросами к каждой главе
 
-ADD_FOLDER = True  # Добавлять ли папку с названием ранобе
-FILTER_ADS = True  # Удалять ли рекламу, ссылки на соцсети и водяные знаки переводчиков
-CHECK_AD_BANNERS = True  # Проверять подозрительные рекламные баннеры (повторяющиеся в конце глав)
-BANNER_MIN_REPEATS = 2  # Минимальное количество повторений баннера для проверки
+ADD_FOLDER = CONFIG.get("add_folder", True)  # Добавлять ли папку с названием ранобе
+FILTER_ADS = CONFIG.get("filter_ads", True)  # Удалять ли рекламу, ссылки на соцсети и водяные знаки переводчиков
+CHECK_AD_BANNERS = CONFIG.get("check_ad_banners", True)  # Проверять подозрительные рекламные баннеры (повторяющиеся в конце глав)
+BANNER_MIN_REPEATS = CONFIG.get("banner_min_repeats", 2)  # Минимальное количество повторений баннера для проверки
 
 class RanobeDownloader:
-    base_url = "https://api.cdnlibs.org"
+    base_url = CONFIG.get("base_url", "https://api.cdnlibs.org")
 
     def __init__(self, name, volume=None, filter_ads=FILTER_ADS, check_ad_banners=CHECK_AD_BANNERS):
         self.data = None  

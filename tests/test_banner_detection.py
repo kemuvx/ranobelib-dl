@@ -14,6 +14,12 @@ from utils import (
     save_ad_banners_cache,
     review_ad_banners,
     display_terminal_image,
+    get_image_dimensions,
+    timed_input,
+    load_config,
+    DEFAULT_CONFIG,
+    find_config_path,
+    CONFIG,
 )
 
 
@@ -266,6 +272,67 @@ class TestSuspiciousBannerDetection(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertTrue(res[0]['is_known'])
 
+    def test_ad_adjacent_image_detection(self):
+        # 1. Horizontal image near ad text (should be flagged even in 1 chapter)
+        self.image_manager.hash_to_image["hash_ad_horiz"] = {
+            'canonical_name': 'ad_banner.png',
+            'disk_path': '/path/ad_banner.png',
+            'epub_path': 'images/ad_banner.png',
+            'ref_count': 1,
+            'hash': 'hash_ad_horiz',
+            'dimensions': (600, 150),  # Horizontal: width > height
+        }
+        self.image_manager.image_occurrences["hash_ad_horiz"] = [
+            {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+        ]
+
+        # 2. Vertical illustration near ad text (e.g. story art)
+        self.image_manager.hash_to_image["hash_ad_vert"] = {
+            'canonical_name': 'story_vert.png',
+            'disk_path': '/path/story_vert.png',
+            'epub_path': 'images/story_vert.png',
+            'ref_count': 1,
+            'hash': 'hash_ad_vert',
+            'dimensions': (400, 800),  # Vertical: height > width
+        }
+        self.image_manager.image_occurrences["hash_ad_vert"] = [
+            {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+        ]
+
+        # 3. Horizontal illustration NOT near ad text, single chapter
+        self.image_manager.hash_to_image["hash_normal_horiz"] = {
+            'canonical_name': 'landscape.png',
+            'disk_path': '/path/landscape.png',
+            'epub_path': 'images/landscape.png',
+            'ref_count': 1,
+            'hash': 'hash_normal_horiz',
+            'dimensions': (800, 400),
+        }
+        self.image_manager.image_occurrences["hash_normal_horiz"] = [
+            {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': False},
+        ]
+
+        # 4. Tiny icon near ad text (e.g. 32x32 emoji/bullet) -> should NOT be flagged as ad banner
+        self.image_manager.hash_to_image["hash_ad_tiny"] = {
+            'canonical_name': 'emoji.png',
+            'disk_path': '/path/emoji.png',
+            'epub_path': 'images/emoji.png',
+            'ref_count': 1,
+            'hash': 'hash_ad_tiny',
+            'dimensions': (32, 32),
+        }
+        self.image_manager.image_occurrences["hash_ad_tiny"] = [
+            {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+        ]
+
+        suspicious = self.image_manager.find_suspicious_banners(min_repeats=2)
+        suspicious_hashes = [s['hash'] for s in suspicious]
+
+        self.assertIn("hash_ad_horiz", suspicious_hashes)
+        self.assertNotIn("hash_ad_vert", suspicious_hashes)
+        self.assertNotIn("hash_normal_horiz", suspicious_hashes)
+        self.assertNotIn("hash_ad_tiny", suspicious_hashes)
+
 
 class TestBookPurgeImage(unittest.TestCase):
     def setUp(self):
@@ -402,6 +469,16 @@ class TestReviewAdBannersInteractive(unittest.TestCase):
         # Hash should be in known_banners and saved in cache file
         self.assertIn("hash_b", self.image_manager.known_banners)
         cached = load_ad_banners_cache(self.cache_file)
+    @patch('builtins.input', return_value='')
+    @patch('utils.display_terminal_image', return_value=True)
+    def test_review_default_enter_purges(self, mock_display, mock_input):
+        review_ad_banners(self.image_manager, self.book, min_repeats=2)
+
+        image_names = [img.name for img in self.book.images]
+        self.assertNotIn("banner.png", image_names)
+        self.assertFalse(os.path.exists(self.banner_file))
+        self.assertIn("hash_b", self.image_manager.known_banners)
+        cached = load_ad_banners_cache(self.cache_file)
         self.assertIn("hash_b", cached)
 
     @patch('builtins.input', return_value='2')
@@ -491,6 +568,102 @@ class TestRanobeDownloaderBannerIntegration(unittest.TestCase):
         downloader_disabled.review_ad_banners.assert_not_called()
 
         shutil.rmtree(downloader.folder_name, ignore_errors=True)
+
+
+class TestTimedInput(unittest.TestCase):
+    @patch('select.select')
+    @patch('sys.stdin')
+    def test_timed_input_timeout_defaults_to_delete(self, mock_stdin, mock_select):
+        mock_stdin.isatty.return_value = True
+        mock_select.return_value = ([], [], [])
+        result = timed_input("Prompt: ", timeout=0.01)
+        self.assertEqual(result, "1")
+
+    @patch('select.select')
+    @patch('sys.stdin')
+    def test_timed_input_user_enters_choice(self, mock_stdin, mock_select):
+        mock_stdin.isatty.return_value = True
+        mock_select.return_value = ([mock_stdin], [], [])
+        mock_stdin.readline.return_value = "2\n"
+        result = timed_input("Prompt: ", timeout=0.01)
+        self.assertEqual(result, "2")
+
+
+class TestGetImageDimensions(unittest.TestCase):
+    def test_png_dimensions(self):
+        png_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x02\x80\x00\x00\x01\x90\x08\x06\x00\x00\x00'
+        dims = get_image_dimensions(png_data)
+        self.assertEqual(dims, (640, 400))
+
+    def test_gif_dimensions(self):
+        gif_data = b'GIF89a\x2c\x01\xc8\x00' + b'\x00' * 20
+        dims = get_image_dimensions(gif_data)
+        self.assertEqual(dims, (300, 200))
+
+    def test_jpeg_dimensions(self):
+        jpeg_data = (
+            b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00\x60\x00\x60\x00\x00'
+            b'\xff\xc0\x00\x11\x08\x01\x5e\x02\xbc\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01'
+            b'\xff\xd9'
+        )
+        dims = get_image_dimensions(jpeg_data)
+        self.assertEqual(dims, (700, 350))
+
+
+class TestConfigSystem(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.custom_config_path = os.path.join(self.test_dir, "test_config.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_default_config_has_all_required_keys(self):
+        required_keys = [
+            "time_to_sleep", "add_folder", "filter_ads", "check_ad_banners",
+            "banner_min_repeats", "review_timeout", "default_review_action",
+            "banner_cache_file", "min_banner_width", "min_banner_height",
+            "min_banner_area", "terminal_max_cols", "terminal_max_rows",
+            "base_url", "token", "headers"
+        ]
+        for key in required_keys:
+            self.assertIn(key, DEFAULT_CONFIG)
+
+    def test_load_config_custom_file_merges_with_defaults(self):
+        custom_data = {
+            "time_to_sleep": 1.5,
+            "add_folder": False,
+            "review_timeout": 5.0,
+            "default_review_action": "2",
+            "headers": {
+                "User-Agent": "CustomAgent/1.0"
+            }
+        }
+        with open(self.custom_config_path, "w", encoding="utf-8") as f:
+            json.dump(custom_data, f)
+
+        cfg = load_config(self.custom_config_path)
+        self.assertEqual(cfg["time_to_sleep"], 1.5)
+        self.assertFalse(cfg["add_folder"])
+        self.assertEqual(cfg["review_timeout"], 5.0)
+        self.assertEqual(cfg["default_review_action"], "2")
+        self.assertEqual(cfg["headers"]["User-Agent"], "CustomAgent/1.0")
+        # Ensure unspecified headers from default are preserved
+        self.assertIn("Accept", cfg["headers"])
+        # Ensure unspecified top-level keys from default are preserved
+        self.assertEqual(cfg["min_banner_width"], 200)
+
+    def test_load_config_corrupted_json_falls_back_to_defaults(self):
+        with open(self.custom_config_path, "w", encoding="utf-8") as f:
+            f.write("{invalid json...")
+
+        cfg = load_config(self.custom_config_path)
+        self.assertEqual(cfg["time_to_sleep"], 0.5)
+        self.assertTrue(cfg["check_ad_banners"])
+
+    def test_find_config_path_returns_existing(self):
+        found = find_config_path("config.json")
+        self.assertTrue(os.path.exists(found))
 
 
 if __name__ == '__main__':
