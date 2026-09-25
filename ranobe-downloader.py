@@ -42,9 +42,9 @@ class RanobeDownloader:
         # ranobe info
         url_to_ranobe = f"{self.base_url}/api/manga/{self.name}?fields[]=background&fields[]=eng_name&fields[]=otherNames&fields[]=summary&fields[]=releaseDate&fields[]=type_id&fields[]=caution&fields[]=views&fields[]=close_view&fields[]=rate_avg&fields[]=rate&fields[]=genres&fields[]=tags&fields[]=teams&fields[]=user&fields[]=franchise&fields[]=authors&fields[]=publisher&fields[]=userRating&fields[]=moderated&fields[]=metadata&fields[]=metadata.count&fields[]=metadata.close_comments&fields[]=manga_status_id&fields[]=chap_count&fields[]=status_id&fields[]=artists&fields[]=format"
         response = requests.get(url_to_ranobe, headers=headers)
-        data = response.json()['data'] 
         if response.status_code != 200:
-            raise Exception(f"HTTP Error {response.status_code}: Failed to fetch {url_to_ranobe} ranobe info with response: {data}\n Maybe bearer token required?")
+            raise Exception(f"HTTP Error {response.status_code}: Failed to fetch {url_to_ranobe} ranobe info: {response.text}\n Maybe bearer token required?")
+        data = response.json()['data'] 
                
         self.info_dict = {
             'id': data.get('id'),
@@ -66,9 +66,9 @@ class RanobeDownloader:
         # ranobe chapters
         url_to_chapters = f"{self.base_url}/api/manga/{self.name}/chapters"
         response = requests.get(url_to_chapters, headers=headers)
-        self.chapters_data = response.json()['data']
         if response.status_code != 200:
-            raise Exception(f"Failed to fetch chapters: {response.status_code}")
+            raise Exception(f"Failed to fetch chapters (HTTP {response.status_code}): {response.text}")
+        self.chapters_data = response.json()['data']
 
         if self.volume is None:
             # whole-book mode: collect every volume in API order, then sort numerically
@@ -147,8 +147,11 @@ class RanobeDownloader:
         
 
         url_to_team_defaults = f"{self.base_url}/api/branches/{self.info_dict['id']}?team_defaults=1"
-        response = requests.get(url_to_team_defaults, headers=headers)
-        team_defaults_data = response.json().get("data", [])
+        try:
+            response = requests.get(url_to_team_defaults, headers=headers)
+            team_defaults_data = response.json().get("data", []) if response.status_code == 200 else []
+        except Exception:
+            team_defaults_data = []
         
         main_branch_id = next((branch['id'] for branch in team_defaults_data if branch.get('name') == "main"), None)
         main_branch_name = teams_dict.get(main_branch_id, list(teams_dict.values())[0])
@@ -233,14 +236,21 @@ class RanobeDownloader:
 
     def fetch_cover_image(self):
         url_to_covers = f"{self.base_url}/api/manga/{self.name}/covers"
-        json_data = requests.get(url_to_covers).json()
-
-        # Build vol-number → orig-url mapping (items with info=null are the global default)
-        self.covers_by_vol = {
-            item["info"]: item["cover"]["orig"]
-            for item in json_data["data"]
-            if item["info"] and "orig" in item["cover"]
-        }
+        try:
+            response = requests.get(url_to_covers, headers=headers)
+            if response.status_code == 200:
+                json_data = response.json()
+                # Build vol-number → orig-url mapping (items with info=null are the global default)
+                self.covers_by_vol = {
+                    item["info"]: item["cover"]["orig"]
+                    for item in json_data.get("data", [])
+                    if item.get("info") and isinstance(item.get("cover"), dict) and "orig" in item["cover"]
+                }
+            else:
+                self.covers_by_vol = {}
+        except Exception as e:
+            print(f"Предупреждение: Не удалось получить список обложек томов: {e}")
+            self.covers_by_vol = {}
 
         if self.volume is None:
             # whole-book mode: main EPUB cover = first volume's cover, or keep default
