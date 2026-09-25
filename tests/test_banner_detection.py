@@ -273,33 +273,48 @@ class TestSuspiciousBannerDetection(unittest.TestCase):
         self.assertTrue(res[0]['is_known'])
 
     def test_ad_adjacent_image_detection(self):
-        # 1. Horizontal image near ad text (should be flagged even in 1 chapter)
-        self.image_manager.hash_to_image["hash_ad_horiz"] = {
-            'canonical_name': 'ad_banner.png',
-            'disk_path': '/path/ad_banner.png',
-            'epub_path': 'images/ad_banner.png',
+        # 1. Single-occurrence horizontal image near ad text -> should NOT be flagged
+        self.image_manager.hash_to_image["hash_ad_single"] = {
+            'canonical_name': 'story_single.png',
+            'disk_path': '/path/story_single.png',
+            'epub_path': 'images/story_single.png',
             'ref_count': 1,
-            'hash': 'hash_ad_horiz',
+            'hash': 'hash_ad_single',
             'dimensions': (600, 150),  # Horizontal: width > height
         }
-        self.image_manager.image_occurrences["hash_ad_horiz"] = [
+        self.image_manager.image_occurrences["hash_ad_single"] = [
             {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
         ]
 
-        # 2. Vertical illustration near ad text (e.g. story art)
+        # 2. Recurring horizontal banner near ad text (in 2 chapters) -> SHOULD be flagged
+        self.image_manager.hash_to_image["hash_ad_recurring"] = {
+            'canonical_name': 'ad_banner.png',
+            'disk_path': '/path/ad_banner.png',
+            'epub_path': 'images/ad_banner.png',
+            'ref_count': 2,
+            'hash': 'hash_ad_recurring',
+            'dimensions': (600, 150),  # Horizontal: width > height
+        }
+        self.image_manager.image_occurrences["hash_ad_recurring"] = [
+            {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+            {'chapter_num': '2', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+        ]
+
+        # 3. Vertical recurring illustration near ad text (e.g. story art) -> should NOT be flagged
         self.image_manager.hash_to_image["hash_ad_vert"] = {
             'canonical_name': 'story_vert.png',
             'disk_path': '/path/story_vert.png',
             'epub_path': 'images/story_vert.png',
-            'ref_count': 1,
+            'ref_count': 2,
             'hash': 'hash_ad_vert',
             'dimensions': (400, 800),  # Vertical: height > width
         }
         self.image_manager.image_occurrences["hash_ad_vert"] = [
             {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+            {'chapter_num': '2', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
         ]
 
-        # 3. Horizontal illustration NOT near ad text, single chapter
+        # 4. Horizontal illustration NOT near ad text, single chapter -> should NOT be flagged
         self.image_manager.hash_to_image["hash_normal_horiz"] = {
             'canonical_name': 'landscape.png',
             'disk_path': '/path/landscape.png',
@@ -312,23 +327,25 @@ class TestSuspiciousBannerDetection(unittest.TestCase):
             {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': False},
         ]
 
-        # 4. Tiny icon near ad text (e.g. 32x32 emoji/bullet) -> should NOT be flagged as ad banner
+        # 5. Tiny recurring icon near ad text (e.g. 32x32 emoji/bullet) -> should NOT be flagged
         self.image_manager.hash_to_image["hash_ad_tiny"] = {
             'canonical_name': 'emoji.png',
             'disk_path': '/path/emoji.png',
             'epub_path': 'images/emoji.png',
-            'ref_count': 1,
+            'ref_count': 2,
             'hash': 'hash_ad_tiny',
             'dimensions': (32, 32),
         }
         self.image_manager.image_occurrences["hash_ad_tiny"] = [
             {'chapter_num': '1', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
+            {'chapter_num': '2', 'is_near_end': False, 'is_near_start': False, 'is_near_ad_text': True},
         ]
 
         suspicious = self.image_manager.find_suspicious_banners(min_repeats=2)
         suspicious_hashes = [s['hash'] for s in suspicious]
 
-        self.assertIn("hash_ad_horiz", suspicious_hashes)
+        self.assertIn("hash_ad_recurring", suspicious_hashes)
+        self.assertNotIn("hash_ad_single", suspicious_hashes)
         self.assertNotIn("hash_ad_vert", suspicious_hashes)
         self.assertNotIn("hash_normal_horiz", suspicious_hashes)
         self.assertNotIn("hash_ad_tiny", suspicious_hashes)
