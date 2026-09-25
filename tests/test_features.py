@@ -355,5 +355,54 @@ class TestChapterContentParserIntegration(unittest.TestCase):
             self.assertIn("EPUB/page0002.xhtml", zf.namelist())
 
 
+class TestFetchCoverImage(unittest.TestCase):
+    def setUp(self):
+        import importlib
+        ranobe_module = importlib.import_module("ranobe-downloader")
+        self.RanobeDownloader = ranobe_module.RanobeDownloader
+
+    @patch('requests.get')
+    def test_fetch_cover_image_passes_headers_and_updates_cover(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "data": [
+                {
+                    "info": "2",
+                    "cover": {"orig": "https://example.com/cover_vol2.jpg"}
+                }
+            ]
+        }
+        mock_get.return_value = mock_resp
+
+        downloader = self.RanobeDownloader(name="test_novel", volume="2")
+        downloader.info_dict = {"cover_url": "https://example.com/default.jpg"}
+        downloader.fetch_cover_image()
+
+        # Check headers passed
+        mock_get.assert_called_once()
+        _, kwargs = mock_get.call_args
+        self.assertIn("headers", kwargs)
+        self.assertIsNotNone(kwargs["headers"])
+
+        # Check volume cover updated
+        self.assertEqual(downloader.info_dict["cover_url"], "https://example.com/cover_vol2.jpg")
+
+    @patch('requests.get')
+    def test_fetch_cover_image_handles_error_gracefully(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_resp.text = "Forbidden"
+        mock_get.return_value = mock_resp
+
+        downloader = self.RanobeDownloader(name="test_novel", volume="2")
+        downloader.info_dict = {"cover_url": "https://example.com/default.jpg"}
+        # Must not raise JSONDecodeError or crash
+        downloader.fetch_cover_image()
+
+        # Cover should remain the default cover
+        self.assertEqual(downloader.info_dict["cover_url"], "https://example.com/default.jpg")
+
+
 if __name__ == '__main__':
     unittest.main()
