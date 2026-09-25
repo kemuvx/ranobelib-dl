@@ -670,7 +670,8 @@ class ImageManager:
                 entry['dimensions'] = dims
 
             is_near_ad_banner = False
-            if has_near_ad and dims:
+            # Banners near ad text must appear in multiple chapters to prevent false positives on single-occurrence illustrations
+            if total_chapters >= max(2, min_repeats) and has_near_ad and dims:
                 w, h = dims
                 # Not vertical (square or horizontal: w >= h) and reasonable banner size (not too small)
                 is_reasonable_size = (w >= min_width and h >= min_height and (w * h) >= min_area)
@@ -691,7 +692,7 @@ class ImageManager:
                 elif is_near_ad_banner and is_boundary_recurring:
                     reason = f"Рядом с текстом рекламы и повторяется на границах глав ({dim_str})"
                 elif is_near_ad_banner:
-                    reason = f"Рядом с текстом рекламы (размер {dim_str}, не вертикальное)"
+                    reason = f"Рядом с текстом рекламы и повторяется в {total_chapters} главах ({dim_str})"
                 else:
                     reason = f"Повторяется на границах глав ({end_or_start_chapters} раз(а))"
 
