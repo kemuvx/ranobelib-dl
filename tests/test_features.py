@@ -36,6 +36,7 @@ class TestBadLinesFilter(unittest.TestCase):
             "Донат на кофе переводчику: номер карты 1234 5678",
             "Платные главы на boosty.to/novel",
             "Источник: https://ranobelib.me/some-novel",
+            "Работала над переводом (команда RanobeList)",
         ]
         for line in ad_lines:
             is_ad, reason = self.filter.is_ad_line(line)

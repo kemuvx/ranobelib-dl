@@ -4,8 +4,17 @@ import re
 import requests
 import os
 import shutil
+import struct
 import subprocess
+import select
+import sys
+import warnings
 from bs4 import BeautifulSoup
+try:
+    from bs4 import XMLParsedAsHTMLWarning
+    warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+except ImportError:
+    pass
 import collections
 import datetime
 import itertools
@@ -18,25 +27,82 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
-    'Accept': '*/*',
-    'Accept-Language': 'ru,en-US;q=0.7,en;q=0.3',
-    'Accept-Encoding': 'gzip, deflate, br, zstd',
-    'Referer': 'https://ranobelib.me/',
-    'Site-Id': '3',
-    'Content-Type': 'application/json',
-    'Client-Time-Zone': 'Asia/Krasnoyarsk',
-    'Origin': 'https://ranobelib.me',
-    'DNT': '1',
-    'Sec-GPC': '1',
-    'Sec-Fetch-Dest': 'empty',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'cross-site',
-    'Connection': 'keep-alive'
+DEFAULT_CONFIG = {
+    "time_to_sleep": 0.5,
+    "add_folder": True,
+    "filter_ads": True,
+    "check_ad_banners": True,
+    "banner_min_repeats": 2,
+    "review_timeout": 10.0,
+    "default_review_action": "1",
+    "banner_cache_file": ".ad_banners_cache.json",
+    "min_banner_width": 200,
+    "min_banner_height": 50,
+    "min_banner_area": 20000,
+    "terminal_max_cols": 80,
+    "terminal_max_rows": 25,
+    "base_url": "https://api.cdnlibs.org",
+    "token": None,
+    "headers": {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0',
+        'Accept': '*/*',
+        'Accept-Language': 'ru,en-US;q=0.7,en;q=0.3',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Referer': 'https://ranobelib.me/',
+        'Site-Id': '3',
+        'Content-Type': 'application/json',
+        'Client-Time-Zone': 'Asia/Krasnoyarsk',
+        'Origin': 'https://ranobelib.me',
+        'DNT': '1',
+        'Sec-GPC': '1',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'cross-site',
+        'Connection': 'keep-alive'
+    }
 }
+
+
+def find_config_path(filename: str = "config.json") -> str:
+    """Find configuration file in current directory or next to script."""
+    if os.path.exists(filename):
+        return filename
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.join(script_dir, filename)
+    if os.path.exists(candidate):
+        return candidate
+    return filename
+
+
+def load_config(config_path: str | None = None) -> dict:
+    """Load configuration from JSON file, falling back to defaults for missing keys."""
+    if config_path is None:
+        config_path = find_config_path("config.json")
+
+    cfg = dict(DEFAULT_CONFIG)
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                user_cfg = json.load(f)
+                if isinstance(user_cfg, dict):
+                    for k, v in user_cfg.items():
+                        if k == "headers" and isinstance(v, dict):
+                            merged_headers = dict(DEFAULT_CONFIG["headers"])
+                            merged_headers.update(v)
+                            cfg["headers"] = merged_headers
+                        else:
+                            cfg[k] = v
+        except Exception as e:
+            print(f"Предупреждение: Не удалось прочитать конфиг {config_path}: {e}")
+    return cfg
+
+
+CONFIG = load_config()
+
+headers = dict(CONFIG.get("headers", DEFAULT_CONFIG["headers"]))
+
 # Токен авторизации для ранобе доступных только авторизованным пользователям
-token = None
+token = CONFIG.get("token") or os.getenv("RANOBELIB_AUTH_TOKEN")
 if token:
     if not token.startswith("Bearer "):
         token = "Bearer " + token
@@ -279,11 +345,73 @@ def detect_image_ext(data: bytes) -> str:
     return 'jpg'
 
 
-DEFAULT_BANNER_CACHE_FILE = ".ad_banners_cache.json"
+def get_image_dimensions(data_or_path: bytes | str | pathlib.Path) -> tuple[int, int] | None:
+    """Return (width, height) for PNG, GIF, WEBP, and JPEG images."""
+    data = None
+    if isinstance(data_or_path, (bytes, bytearray)):
+        data = bytes(data_or_path)
+    else:
+        try:
+            with open(str(data_or_path), 'rb') as f:
+                data = f.read(65536)
+        except Exception:
+            return None
+    if not data:
+        return None
+
+    try:
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(data)) as img:
+            return img.size  # (width, height)
+    except Exception:
+        pass
+
+    try:
+        if data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) >= 24:
+            return struct.unpack('>II', data[16:24])
+        if (data.startswith(b'GIF87a') or data.startswith(b'GIF89a')) and len(data) >= 10:
+            return struct.unpack('<HH', data[6:10])
+        if data.startswith(b'RIFF') and len(data) >= 30 and data[8:12] == b'WEBP':
+            vp8 = data[12:16]
+            if vp8 == b'VP8 ':
+                w, h = struct.unpack('<HH', data[26:30])
+                return (w & 0x3fff, h & 0x3fff)
+            elif vp8 == b'VP8L' and len(data) >= 25:
+                b0, b1, b2, b3 = data[21:25]
+                w = 1 + (((b1 & 0x3F) << 8) | b0)
+                h = 1 + (((b3 & 0xF) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
+                return (w, h)
+            elif vp8 == b'VP8X' and len(data) >= 30:
+                w = 1 + struct.unpack('<I', data[24:27] + b'\x00')[0]
+                h = 1 + struct.unpack('<I', data[27:30] + b'\x00')[0]
+                return (w, h)
+        if data.startswith(b'\xff\xd8'):
+            idx = 2
+            while idx < len(data) - 8:
+                if data[idx] != 0xff:
+                    idx += 1
+                    continue
+                marker = data[idx+1]
+                if marker in (0xc0, 0xc1, 0xc2, 0xc3, 0xc9, 0xca, 0xcb):
+                    h, w = struct.unpack('>HH', data[idx+5:idx+9])
+                    return (w, h)
+                if idx + 4 > len(data):
+                    break
+                length = struct.unpack('>H', data[idx+2:idx+4])[0]
+                idx += 2 + length
+    except Exception:
+        pass
+    return None
 
 
-def load_ad_banners_cache(cache_path: str = DEFAULT_BANNER_CACHE_FILE) -> set[str]:
+DEFAULT_BANNER_CACHE_FILE = CONFIG.get("banner_cache_file", ".ad_banners_cache.json")
+
+
+def load_ad_banners_cache(cache_path: str | None = None) -> set[str]:
     """Load persistent set of confirmed ad banner SHA-256 hashes."""
+    if cache_path is None:
+        cache_path = CONFIG.get("banner_cache_file", DEFAULT_BANNER_CACHE_FILE)
     if os.path.exists(cache_path):
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
@@ -297,8 +425,10 @@ def load_ad_banners_cache(cache_path: str = DEFAULT_BANNER_CACHE_FILE) -> set[st
     return set()
 
 
-def save_ad_banners_cache(hashes: set[str], cache_path: str = DEFAULT_BANNER_CACHE_FILE):
+def save_ad_banners_cache(hashes: set[str], cache_path: str | None = None):
     """Save persistent set of confirmed ad banner SHA-256 hashes."""
+    if cache_path is None:
+        cache_path = CONFIG.get("banner_cache_file", DEFAULT_BANNER_CACHE_FILE)
     try:
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(sorted(list(hashes)), f, indent=2, ensure_ascii=False)
@@ -306,11 +436,53 @@ def save_ad_banners_cache(hashes: set[str], cache_path: str = DEFAULT_BANNER_CAC
         print(f"Не удалось сохранить кэш баннеров в {cache_path}: {e}")
 
 
-def display_terminal_image(image_path: str, max_cols: int = 80, max_rows: int = 25) -> bool:
+def timed_input(prompt: str, timeout: float | None = None, default: str | None = None) -> str:
+    """Prompt user for input with a timeout in seconds. Defaults if timeout expires."""
+    if timeout is None:
+        timeout = float(CONFIG.get("review_timeout", 10.0))
+    if default is None:
+        default = str(CONFIG.get("default_review_action", "1"))
+
+    import builtins
+    if hasattr(builtins.input, "return_value") or hasattr(builtins.input, "_mock_return_value"):
+        val = builtins.input(prompt)
+        return str(val).strip() if val is not None else default
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+
+    try:
+        if not sys.stdin.isatty():
+            line = sys.stdin.readline()
+            return line.strip() if line else default
+    except Exception:
+        pass
+
+    try:
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            line = sys.stdin.readline()
+            return line.strip()
+        else:
+            sys.stdout.write(f"\n  [ТАЙМАУТ {int(timeout)} сек: автоматический выбор '{default}']\n")
+            sys.stdout.flush()
+            return default
+    except Exception:
+        try:
+            return input().strip()
+        except EOFError:
+            return default
+
+
+def display_terminal_image(image_path: str, max_cols: int | None = None, max_rows: int | None = None) -> bool:
     """Display an image directly in the terminal using Sixel or Unicode symbols.
 
     Returns True if successfully displayed, False otherwise.
     """
+    if max_cols is None:
+        max_cols = int(CONFIG.get("terminal_max_cols", 80))
+    if max_rows is None:
+        max_rows = int(CONFIG.get("terminal_max_rows", 25))
     if not os.path.exists(image_path):
         return False
 
@@ -381,6 +553,7 @@ class ImageManager:
         image_counter: int = 1,
         is_near_end: bool = False,
         is_near_start: bool = False,
+        is_near_ad_text: bool = False,
     ) -> tuple[str, str, bool]:
         """Download or reuse an image based on URL and content hash.
 
@@ -396,8 +569,10 @@ class ImageManager:
                 'chapter_num': str(chapter_num),
                 'is_near_end': is_near_end,
                 'is_near_start': is_near_start,
+                'is_near_ad_text': is_near_ad_text,
             })
-            print(f"  [Повторный арт] Гл. {chapter_num}: изображение уже скачано ({entry['canonical_name']}), повторно используем.")
+            art_stem = entry['canonical_name'].rsplit('.', 1)[0]
+            print(f"Повторный арт {art_stem}")
             return entry['epub_path'], entry['disk_path'], True
 
         # 2. Download image
@@ -417,12 +592,14 @@ class ImageManager:
             'chapter_num': str(chapter_num),
             'is_near_end': is_near_end,
             'is_near_start': is_near_start,
+            'is_near_ad_text': is_near_ad_text,
         })
 
         if img_hash in self.hash_to_image:
             entry = self.hash_to_image[img_hash]
             entry['ref_count'] += 1
-            print(f"  [Повторный арт] Гл. {chapter_num}: найден дубликат изображения ({entry['canonical_name']}), повторно используем.")
+            art_stem = entry['canonical_name'].rsplit('.', 1)[0]
+            print(f"Повторный арт {art_stem}")
             return entry['epub_path'], entry['disk_path'], True
 
         # 4. New unique image
@@ -430,6 +607,7 @@ class ImageManager:
         canonical_name = f"{img_key}.{ext}"
         folder_img_path = f"{self.folder_name}images/{canonical_name}"
         epub_img_path = f"images/{canonical_name}"
+        dims = get_image_dimensions(img_bytes)
 
         try:
             with open(folder_img_path, 'wb') as f:
@@ -447,12 +625,29 @@ class ImageManager:
             'epub_path': epub_img_path,
             'ref_count': 1,
             'hash': img_hash,
+            'dimensions': dims,
         }
         print(f"Загрузка арта {chapter_num}-{image_counter}")
         return epub_img_path, folder_img_path, False
 
-    def find_suspicious_banners(self, min_repeats: int = 2) -> list[dict]:
-        """Find images that appear in multiple chapters at the end or start."""
+    def find_suspicious_banners(
+        self,
+        min_repeats: int | None = None,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        min_area: int | None = None
+    ) -> list[dict]:
+        """Find images that appear in multiple chapters at the end or start,
+        or are nearby text flagged as an ad and are square or horizontal."""
+        if min_repeats is None:
+            min_repeats = int(CONFIG.get("banner_min_repeats", 2))
+        if min_width is None:
+            min_width = int(CONFIG.get("min_banner_width", 200))
+        if min_height is None:
+            min_height = int(CONFIG.get("min_banner_height", 50))
+        if min_area is None:
+            min_area = int(CONFIG.get("min_banner_area", 20000))
+
         suspicious = []
         for img_hash, entry in self.hash_to_image.items():
             if img_hash in self.whitelisted_hashes:
@@ -462,17 +657,43 @@ class ImageManager:
             distinct_chapters = set(occ['chapter_num'] for occ in occurrences)
             total_chapters = len(distinct_chapters)
 
-            end_or_start_occs = [occ for occ in occurrences if occ['is_near_end'] or occ['is_near_start']]
+            end_or_start_occs = [occ for occ in occurrences if occ.get('is_near_end') or occ.get('is_near_start')]
             end_or_start_chapters = len(set(occ['chapter_num'] for occ in end_or_start_occs))
 
             is_known = img_hash in self.known_banners
+            is_boundary_recurring = (total_chapters >= min_repeats and end_or_start_chapters >= 2)
 
-            if is_known or (total_chapters >= min_repeats and end_or_start_chapters >= 2):
+            has_near_ad = any(occ.get('is_near_ad_text') for occ in occurrences)
+            dims = entry.get('dimensions')
+            if not dims and entry.get('disk_path') and os.path.exists(entry['disk_path']):
+                dims = get_image_dimensions(entry['disk_path'])
+                entry['dimensions'] = dims
+
+            is_near_ad_banner = False
+            if has_near_ad and dims:
+                w, h = dims
+                # Not vertical (square or horizontal: w >= h) and reasonable banner size (not too small)
+                is_reasonable_size = (w >= min_width and h >= min_height and (w * h) >= min_area)
+                if w >= h and is_reasonable_size:
+                    is_near_ad_banner = True
+
+            if is_known or is_boundary_recurring or is_near_ad_banner:
                 def _sort_key(ch):
                     try:
                         return float(ch)
                     except ValueError:
                         return 9999.0
+
+                reason = ""
+                dim_str = f"{dims[0]}x{dims[1]}" if dims else ""
+                if is_known:
+                    reason = "Известный рекламный баннер из кэша"
+                elif is_near_ad_banner and is_boundary_recurring:
+                    reason = f"Рядом с текстом рекламы и повторяется на границах глав ({dim_str})"
+                elif is_near_ad_banner:
+                    reason = f"Рядом с текстом рекламы (размер {dim_str}, не вертикальное)"
+                else:
+                    reason = f"Повторяется на границах глав ({end_or_start_chapters} раз(а))"
 
                 suspicious.append({
                     'hash': img_hash,
@@ -483,21 +704,37 @@ class ImageManager:
                     'end_or_start_chapters': end_or_start_chapters,
                     'chapter_nums': sorted(list(distinct_chapters), key=_sort_key),
                     'is_known': is_known,
+                    'is_near_ad_banner': is_near_ad_banner,
+                    'reason': reason,
+                    'dimensions': dims,
                 })
         return suspicious
 
 
-def review_ad_banners(image_manager: ImageManager, book, min_repeats: int = 2):
+def review_ad_banners(
+    image_manager: ImageManager,
+    book,
+    min_repeats: int | None = None,
+    timeout: float | None = None,
+    default_action: str | None = None
+):
     """Review suspicious recurring banner images and purge confirmed ones."""
     if not image_manager or not book:
         return
+
+    if min_repeats is None:
+        min_repeats = int(CONFIG.get("banner_min_repeats", 2))
+    if timeout is None:
+        timeout = float(CONFIG.get("review_timeout", 10.0))
+    if default_action is None:
+        default_action = str(CONFIG.get("default_review_action", "1"))
 
     suspicious = image_manager.find_suspicious_banners(min_repeats=min_repeats)
     if not suspicious:
         return
 
     print("\n" + "=" * 65)
-    print("  ПРОВЕРКА РЕКЛАМНЫХ БАННЕРОВ В КОНЦЕ/НАЧАЛЕ ГЛАВ")
+    print("  ПРОВЕРКА РЕКЛАМНЫХ БАННЕРОВ В ГЛАВАХ")
     print("=" * 65)
 
     for item in suspicious:
@@ -506,8 +743,8 @@ def review_ad_banners(image_manager: ImageManager, book, min_repeats: int = 2):
         disk_path = item['disk_path']
         ch_list = item['chapter_nums']
         total_ch = item['total_chapters']
-        end_start_ch = item['end_or_start_chapters']
         is_known = item['is_known']
+        reason = item.get('reason', 'Возможная реклама')
 
         if is_known:
             print(f"\n[!] Известный рекламный баннер из кэша: '{canonical_name}' (хэш {img_hash[:8]})")
@@ -523,23 +760,29 @@ def review_ad_banners(image_manager: ImageManager, book, min_repeats: int = 2):
             continue
 
         print(f"\n[?] Подозрительное изображение: '{canonical_name}'")
-        print(f"    Встретилось в {total_ch} глав(ах), из них {end_start_ch} раз(а) на границе глав:")
-        print(f"    Главы: {', '.join(ch_list[:20])}{'...' if len(ch_list) > 20 else ''}")
+        print(f"    Причина: {reason}")
+        print(f"    Встретилось в {total_ch} глав(ах): {', '.join(ch_list[:20])}{'...' if len(ch_list) > 20 else ''}")
         print(f"    Файл: {disk_path}")
 
         print("\nПредпросмотр изображения:")
         displayed = display_terminal_image(disk_path)
         if not displayed:
-            print("  (Терминал не поддерживает sixel/chafa, откройте файл вручную)")
+            print("  (Терминал не поддерживает sixel/chafa, предпросмотр недоступен)")
 
         while True:
             print("\nЧто сделать с этим изображением?")
-            print("  1. Удалить из ВСЕХ глав (рекламный баннер) [По умолчанию: Enter / 1]")
-            print("  2. Оставить во всех главах (сюжетная иллюстрация / арт)")
-            print("  3. Открыть во внешнем просмотрщике (xdg-open)")
-            choice = input("Выберите действие (1/2/3, по умолчанию 1): ").strip()
+            if default_action == "1":
+                print(f"  1. Удалить из ВСЕХ глав (рекламный баннер) [По умолчанию по таймауту {int(timeout)} сек / Enter]")
+                print("  2. Оставить во всех главах (сюжетная иллюстрация / арт)")
+            else:
+                print("  1. Удалить из ВСЕХ глав (рекламный баннер)")
+                print(f"  2. Оставить во всех главах (сюжетная иллюстрация / арт) [По умолчанию по таймауту {int(timeout)} сек / Enter]")
+            choice = timed_input(f"Выберите действие (1/2, по умолчанию {default_action}): ", timeout=timeout, default=default_action).strip()
 
-            if choice in ("", "1"):
+            if choice in ("", default_action):
+                choice = default_action
+
+            if choice == "1":
                 purged = book.purge_image(canonical_name)
                 image_manager.known_banners.add(img_hash)
                 save_ad_banners_cache(image_manager.known_banners, image_manager.banner_cache_path)
@@ -555,14 +798,8 @@ def review_ad_banners(image_manager: ImageManager, book, min_repeats: int = 2):
                 image_manager.whitelisted_hashes.add(img_hash)
                 print(f"  [ОСТАВЛЕНО] '{canonical_name}' сохранено в книге.")
                 break
-            elif choice == "3":
-                if shutil.which("xdg-open"):
-                    subprocess.Popen(["xdg-open", disk_path])
-                    print("  Открыто в просмотрщике системы.")
-                else:
-                    print(f"  xdg-open не найден. Путь к файлу: {disk_path}")
             else:
-                print("  Неверный ввод. Введите 1, 2 или 3.")
+                print("  Неверный ввод. Введите 1 или 2.")
 
     print("=" * 65 + "\n")
 
@@ -638,7 +875,12 @@ class BadLinesFilter:
     )
 
     _STRICT_CREDIT_LINE_RE = re.compile(
-        r"^\s*(?:(?:Над\s+переводом\s+работал[аио]?|Перевод(?:чик)?|Редакт(?:ор|ура)|Вычитка|Бета|Тайп(?:ер)?|Клинер|Анлейт|Сверил)\s*:\s*[\w\d_\s.,&/@:()-]{2,80})$",
+        r"^\s*(?:"
+        r"(?:Над\s+переводом\s+работал[аио]?|работал[аио]?\s+над\s+переводом|работа\s+над\s+переводом)"
+        r"(?:\s*[:\-(]|\s+команда|\s+[\w\d_]+\b|\s*$).*"
+        r"|"
+        r"(?:Перевод(?:чик)?|Редакт(?:ор|ура)|Вычитка|Бета|Тайп(?:ер)?|Клинер|Анлейт|Сверил)\s*:\s*[\w\d_\s.,&/@:()-]{2,80}"
+        r")$",
         re.IGNORECASE
     )
 
@@ -683,12 +925,11 @@ class BadLinesFilter:
         if self._STANDALONE_LINK_RE.match(text):
             return True, "Ссылка или никнейм"
         if self._STRICT_CREDIT_LINE_RE.match(text):
-            if ":" in text or "@" in text or "работа" in text.lower():
-                return True, "Титры команды перевода"
+            return True, "Титры команды перевода"
 
         if has_donation_kw and (has_explicit_url or has_tg_handle or "донат" in text.lower() or "номер карты" in text.lower() or "бусти" in text.lower()):
             return True, "Донат / платные главы"
-        if has_credit_kw and (has_explicit_url or has_tg_handle or has_social_ref):
+        if has_credit_kw and (has_explicit_url or has_tg_handle or has_social_ref or bool(re.search(r"\bкоманда\b", text, re.IGNORECASE))):
             return True, "Титры с контактами"
         if has_cta_kw and (has_explicit_url or has_tg_handle or has_social_ref):
             return True, "Призыв подписаться в соцсети"
@@ -716,7 +957,7 @@ class BadLinesFilter:
                 text = tag.get_text(strip=True)
                 is_ad, reason = self.is_ad_line(text)
                 if is_ad:
-                    print(f"  [УДАЛЕНА РЕКЛАМА | Гл. {chapter_num}]: \"{text}\"  (Причина: {reason})")
+                    print(f"Удалена реклама: {text}")
                     tag.decompose()
                     continue
 
@@ -747,7 +988,7 @@ class BadLinesFilter:
                         continue
                     is_ad, reason = self.is_ad_line(seg_text)
                     if is_ad:
-                        print(f"  [УДАЛЕНА РЕКЛАМА | Гл. {chapter_num}]: \"{seg_text}\"  (Причина: {reason})")
+                        print(f"Удалена реклама: {seg_text}")
                         for n in seg_nodes:
                             n.extract()
                         if br_node:
@@ -787,7 +1028,7 @@ class ChapterContentParser:
         self.image_prefix = image_prefix  # prefix for image filenames to avoid cross-volume collisions
         self.image_manager = image_manager or ImageManager(folder_name=folder_name, book=None, headers=headers)
         self.filter_ads = filter_ads
-        self.ad_filter = BadLinesFilter() if filter_ads else None
+        self.ad_filter = BadLinesFilter()
 
     def fetch_content(self) -> tuple[str, dict]:
         """Парсит и анализирует главу"""
@@ -837,6 +1078,33 @@ class ChapterContentParser:
             leading_len = sum(len(s.strip()) for s in leading_strings)
             is_near_start = leading_len < 50
 
+            # Proximity to ad text
+            is_near_ad_text = False
+            if img.parent:
+                parent_text = img.parent.get_text(strip=True)
+                if parent_text and self.ad_filter.is_ad_line(parent_text)[0]:
+                    is_near_ad_text = True
+                else:
+                    curr = img.parent
+                    for _ in range(2):
+                        curr = curr.find_previous_sibling()
+                        if not curr:
+                            break
+                        text = curr.get_text(strip=True)
+                        if text and self.ad_filter.is_ad_line(text)[0]:
+                            is_near_ad_text = True
+                            break
+                    if not is_near_ad_text:
+                        curr = img.parent
+                        for _ in range(2):
+                            curr = curr.find_next_sibling()
+                            if not curr:
+                                break
+                            text = curr.get_text(strip=True)
+                            if text and self.ad_filter.is_ad_line(text)[0]:
+                                is_near_ad_text = True
+                                break
+
             img_key = f"{self.image_prefix}{self.chapter_num}-{image_counter}"
             epub_img_path, folder_img_path, is_dup = self.image_manager.process_image(
                 img_url=img_url,
@@ -845,6 +1113,7 @@ class ChapterContentParser:
                 image_counter=image_counter,
                 is_near_end=is_near_end,
                 is_near_start=is_near_start,
+                is_near_ad_text=is_near_ad_text,
             )
             if not is_dup:
                 self.images_dict[str(image_counter)] = folder_img_path
@@ -935,6 +1204,7 @@ class ChapterContentParser:
     ):
         is_near_end = False
         is_near_start = False
+        is_near_ad_text = False
         if element_idx is not None and total_elements is not None and all_elements is not None:
             trailing_text = ""
             for trail_el in all_elements[element_idx + 1:]:
@@ -945,6 +1215,17 @@ class ChapterContentParser:
             for lead_el in all_elements[:element_idx]:
                 leading_text += extract_text_from_prosemirror(lead_el)
             is_near_start = (element_idx <= 1) and (len(leading_text.strip()) < 50)
+
+            # Check adjacent elements (up to 2 before and 2 after) for ad text
+            start_chk = max(0, element_idx - 2)
+            end_chk = min(total_elements, element_idx + 3)
+            for chk_idx in range(start_chk, end_chk):
+                if chk_idx == element_idx:
+                    continue
+                el_text = extract_text_from_prosemirror(all_elements[chk_idx]).strip()
+                if el_text and self.ad_filter.is_ad_line(el_text)[0]:
+                    is_near_ad_text = True
+                    break
 
         for image in element['attrs']['images']:
             img_url = attachments.get(image['image'])
@@ -957,6 +1238,7 @@ class ChapterContentParser:
                     image_counter=image_counter,
                     is_near_end=is_near_end,
                     is_near_start=is_near_start,
+                    is_near_ad_text=is_near_ad_text,
                 )
                 content += f'<p><img src="{epub_img_path}"></img></p>\n'
                 if not is_dup:
